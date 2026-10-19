@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# Keeps main a pure mirror: a push to main is only allowed if it points exactly at upstream/main.
+# Install: cp fork/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"
+up=$(git rev-parse --verify --quiet upstream/main)
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ] && [ "$local_sha" != "$up" ]; then
+    echo "pre-push: refusing to push to main. main mirrors upstream; work goes to collin/main (see FORK.md)." >&2
+    status=1
+  fi
+done
+exit $status
