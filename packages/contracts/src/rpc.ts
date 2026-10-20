@@ -5,6 +5,16 @@ import {
 } from "./orchestrationV2.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
+  DictationAppendInput,
+  DictationAppendResult,
+  DictationCancelInput,
+  DictationError,
+  DictationFinishInput,
+  DictationFinishResult,
+  DictationStructureInput,
+  DictationStructureResult,
+} from "./dictation.ts";
+import {
   McpAppCallToolInput,
   McpAppCallToolResult,
   McpAppReadResourceInput,
@@ -503,6 +513,10 @@ export const WS_METHODS = {
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
+  dictationAppend: "dictation.append",
+  dictationFinish: "dictation.finish",
+  dictationCancel: "dictation.cancel",
+  dictationStructure: "dictation.structure",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
   serverReportHostPowerState: "server.reportHostPowerState",
@@ -890,6 +904,30 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
 const WsServerCheckOtlpEndpointRpc = Rpc.make(WS_METHODS.serverCheckOtlpEndpoint, {
   payload: OtlpEndpointCheckInput,
   success: OtlpEndpointCheckResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDictationAppendRpc = Rpc.make(WS_METHODS.dictationAppend, {
+  payload: DictationAppendInput,
+  success: DictationAppendResult,
+  error: Schema.Union([EnvironmentAuthorizationError, DictationError]),
+});
+
+const WsDictationFinishRpc = Rpc.make(WS_METHODS.dictationFinish, {
+  payload: DictationFinishInput,
+  success: DictationFinishResult,
+  error: Schema.Union([EnvironmentAuthorizationError, DictationError]),
+});
+
+const WsDictationStructureRpc = Rpc.make(WS_METHODS.dictationStructure, {
+  payload: DictationStructureInput,
+  success: DictationStructureResult,
+  error: Schema.Union([EnvironmentAuthorizationError, DictationError]),
+});
+
+const WsDictationCancelRpc = Rpc.make(WS_METHODS.dictationCancel, {
+  payload: DictationCancelInput,
+  success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
 });
 
@@ -1928,6 +1966,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerCheckOtlpEndpointRpc,
+  WsDictationAppendRpc,
+  WsDictationFinishRpc,
+  WsDictationCancelRpc,
+  WsDictationStructureRpc,
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,

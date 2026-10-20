@@ -1054,6 +1054,8 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useDictation } from "../../dictation/useDictation";
+import { ComposerDictationButton } from "./ComposerDictationButton";
 import { toastManager } from "../ui/toast";
 import {
   BotIcon,
@@ -5798,6 +5800,56 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const insertComposerTextAtEndStable = useStableCallback(insertComposerTextAtEnd);
 
+  const dictation = useDictation({
+    environmentId,
+    insert: (text) =>
+      insertComposerTextStable(`${text} `, "cursor", { ensureLeadingBoundary: true }),
+  });
+  const toggleDictationStable = useStableCallback(dictation.toggle);
+  const cancelDictationStable = useStableCallback(dictation.cancel);
+
+  useEffect(() => {
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        // Before anything else claims Esc (it can also interrupt a running turn).
+        if (cancelDictationStable()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: getTerminalFocusOwner() !== null,
+          terminalOpen,
+          modelPickerOpen: isComposerModelPickerOpen,
+        },
+      });
+      if (command !== "composer.dictate" && command !== "composer.dictateStructured") return;
+      // With several composers on screen, the one holding focus dictates.
+      const focusedForm = document.activeElement?.closest("form");
+      if (
+        focusedForm &&
+        focusedForm !== composerFormRef.current &&
+        focusedForm.querySelector('[data-chat-composer-actions="right"]')
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      toggleDictationStable(command === "composer.dictateStructured");
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [
+    cancelDictationStable,
+    isComposerModelPickerOpen,
+    keybindings,
+    terminalOpen,
+    toggleDictationStable,
+  ]);
+
   const addComposerFolders = (folders: File[]) => {
     const target = folderDropTarget({
       localEnvironmentDisabled: isLocalEnvironmentDisabled(),
@@ -7285,6 +7337,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
                 >
+                  <ComposerDictationButton
+                    state={dictation.state}
+                    onToggle={toggleDictationStable}
+                    dictateShortcutLabel={shortcutLabelForCommand(keybindings, "composer.dictate")}
+                    structuredShortcutLabel={shortcutLabelForCommand(
+                      keybindings,
+                      "composer.dictateStructured",
+                    )}
+                  />
                   {showComposerAttachAction ? (
                     <>
                       <input

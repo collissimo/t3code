@@ -84,6 +84,11 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverGetDatabaseStorage]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
+  // Dictation is input to a prompt, and a structured rewrite runs a model on this environment.
+  [WS_METHODS.dictationAppend]: AuthOrchestrationOperateScope,
+  [WS_METHODS.dictationFinish]: AuthOrchestrationOperateScope,
+  [WS_METHODS.dictationCancel]: AuthOrchestrationOperateScope,
+  [WS_METHODS.dictationStructure]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSearchAcpRegistry]: AuthOrchestrationReadScope,
   [WS_METHODS.serverPrepareAcpRegistryAgent]: AuthProvidersManageScope,
   [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: AuthProvidersManageScope,
