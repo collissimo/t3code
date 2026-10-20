@@ -1,0 +1,199 @@
+# Fork releases: Windows x64 nightlies of upstream main with this fork's features merged in.
+#
+# The desktop app looks for updates in the repository it was built in (GITHUB_REPOSITORY ends up
+# in app-update.yml), so a build from here keeps updating from here and the update button never
+# trades the fork for a plain upstream build. Upstream's release.yml needs runners and secrets a
+# fork does not have; this is the one job a Windows install needs.
+#
+# collin/main is merged with upstream/main for the build only; nothing is pushed to a branch.
+# A merge conflict fails the run (and GitHub mails the owner): then sync collin/main by hand.
+name: Fork release
+
+on:
+  schedule:
+    # Every six hours, a minute off the hour; a run without new commits ends after the check.
+    - cron: "17 */6 * * *"
+  push: # TEMPORARY: test run before merge
+    branches: [t3/fork-releases]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if nothing changed since the last release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository != 'pingdotgg/t3code'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORK_BRANCH: collin/main
+      UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
+      - name: Merge upstream into the fork
+        id: merge
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init -q .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch -q --no-tags origin "$FORK_BRANCH"
+          fork_sha=$(git rev-parse FETCH_HEAD)
+          git fetch -q --no-tags upstream main
+          upstream_sha=$(git rev-parse FETCH_HEAD)
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach "$fork_sha"
+          if ! git merge -q --no-edit -m "Merge upstream main ${upstream_sha:0:12}" "$upstream_sha"; then
+            git diff --name-only --diff-filter=U | sed 's/^/::error::conflict: /'
+            echo "::error::upstream main no longer merges cleanly into $FORK_BRANCH; sync it by hand"
+            exit 1
+          fi
+          echo "fork_sha=$fork_sha" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "build_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Skip when the last release has the same commits
+        id: due
+        env:
+          FORCE: ${{ inputs.force || false }}
+          FORK_SHA: ${{ steps.merge.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""')
+          body=""
+          if [[ -n "$last" ]]; then
+            body=$(gh release view "$last" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          fi
+          if [[ "$FORCE" != "true" && "$body" == *"Fork: $FORK_SHA"* && "$body" == *"Upstream: $UPSTREAM_SHA"* ]]; then
+            echo "$last already has fork $FORK_SHA and upstream $UPSTREAM_SHA."
+            echo "due=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Vite+
+        if: steps.due.outputs.due == 'true'
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      # Same scheme as upstream nightlies, so the app's nightly channel picks these up.
+      - name: Resolve version
+        if: steps.due.outputs.due == 'true'
+        id: version
+        env:
+          BUILD_SHA: ${{ steps.merge.outputs.build_sha }}
+          RUN_STARTED_AT: ${{ github.run_started_at }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          node scripts/resolve-nightly-release.ts \
+            --date "$(date -u -d "$RUN_STARTED_AT" +%Y%m%d)" \
+            --run-number "$RUN_NUMBER" \
+            --sha "$BUILD_SHA" \
+            --github-output
+
+      - name: Install dependencies
+        if: steps.due.outputs.due == 'true'
+        run: vp install
+
+      - name: Install Spectre-mitigated MSVC libs
+        if: steps.due.outputs.due == 'true'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
+
+      - name: Setup Rust
+        if: steps.due.outputs.due == 'true'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build resource monitor
+        if: steps.due.outputs.due == 'true'
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-pc-windows-msvc
+
+      - name: Set package versions
+        if: steps.due.outputs.due == 'true'
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      # Unsigned, and without the WSL runtime upstream bundles from its Linux CLI build.
+      # T3 Connect needs the public relay and Clerk values; they come from repository variables.
+      - name: Build desktop artifact
+        if: steps.due.outputs.due == 'true'
+        env:
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: true
+          T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+          T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+          T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
+        run: |
+          vp run dist:desktop:artifact \
+            --platform win --target nsis --arch x64 \
+            --build-version "${{ steps.version.outputs.version }}" \
+            --verbose
+
+      - name: Check update feed
+        if: steps.due.outputs.due == 'true'
+        run: |
+          set -euo pipefail
+          ls -la release
+          grep -q "version: ${{ steps.version.outputs.version }}" release/nightly.yml
+          cat release/nightly.yml
+
+      # The tag goes on the fork branch: pushing the merge itself would need workflow-write rights,
+      # which GITHUB_TOKEN never has when upstream touched .github/workflows.
+      - name: Publish release
+        if: steps.due.outputs.due == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          FORK_SHA: ${{ steps.merge.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release/*.exe release/*.blockmap release/nightly.yml)
+          notes=$(printf '%s\n' \
+            "Windows x64 build of upstream main with the fork's features (see FORK.md). Unsigned." \
+            "" \
+            "Fork: $FORK_SHA" \
+            "Upstream: $UPSTREAM_SHA")
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$FORK_SHA" \
+            --title "T3 Code Nightly $VERSION (fork)" \
+            --notes "$notes" \
+            --prerelease
