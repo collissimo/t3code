@@ -24,6 +24,28 @@ import { DEFAULT_STRUCTURE_PROMPT } from "./structurePrompt.ts";
 import { DEFAULT_STRUCTURE_CODEWORDS, removeFillers, splitCodeword } from "./transcriptText.ts";
 
 const IDLE_UNLOAD_MS = 15 * 60_000;
+const NATIVE_LIBRARY_NAME =
+  process.platform === "win32"
+    ? "transcribe.dll"
+    : process.platform === "darwin"
+      ? "libtranscribe.dylib"
+      : "libtranscribe.so";
+
+// transcribe-cpp dlopens a native library; it is only loaded once someone dictates.
+const loadTranscribeCpp = async (path: Path.Path): Promise<TranscribeModule> => {
+  const module = (await import("transcribe-cpp")) as TranscribeModule;
+  if (!process.env.TRANSCRIBE_LIBRARY) {
+    // In the desktop app the package sits in an asar archive, which the OS loader cannot read;
+    // its DLLs are unpacked beside the archive.
+    const directory = module.artifactDir();
+    const unpacked = directory.replace(/\.asar([\\/])/, ".asar.unpacked$1");
+    if (unpacked !== directory) {
+      process.env.TRANSCRIBE_LIBRARY = path.join(unpacked, NATIVE_LIBRARY_NAME);
+    }
+  }
+  return module;
+};
+
 const STRUCTURE_TIMEOUT = "90 seconds";
 const STRUCTURE_MODEL = "haiku";
 const STRUCTURE_EFFORT = "medium";
@@ -78,8 +100,7 @@ const make = Effect.gen(function* () {
     Effect.sync(
       () =>
         new DictationEngine({
-          // transcribe-cpp dlopens a native library; it is only loaded once someone dictates.
-          loadModule: () => import("transcribe-cpp") as Promise<TranscribeModule>,
+          loadModule: () => loadTranscribeCpp(path),
           resolveModel: (language) =>
             Effect.runPromiseWith(services)(
               findModel({ language, configured: configuredModel, directories }),

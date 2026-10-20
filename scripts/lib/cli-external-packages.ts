@@ -21,6 +21,11 @@ export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "@yuuang/",
   "@ff-labs/",
   "@napi-rs/keyring",
+  // Dictation: transcribe.cpp finds its platform package beside it and dlopens the DLLs in it.
+  "transcribe-cpp",
+  "@transcribe-cpp/",
+  "koffi",
+  "@koromix/",
   "@clerk/electron-passkeys",
   "node-gyp-build",
   "node-addon-api",
