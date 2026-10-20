@@ -124,6 +124,11 @@ const makeEngine = (resolveModel = async () => "model.gguf") => {
   return { engine, advance: (ms: number) => (now += ms) };
 };
 
+// Lets the engine's background model load settle.
+const flushMicrotasks = async () => {
+  for (let round = 0; round < 10; round++) await Promise.resolve();
+};
+
 const speech = (seconds: number) => new Float32Array(seconds * SAMPLE_RATE).fill(0.25);
 
 describe("DictationEngine", () => {
@@ -152,11 +157,11 @@ describe("DictationEngine", () => {
       throw new Error("No Parakeet model found.");
     });
     engine.append("a", "de", speech(1));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
     expect(() => engine.append("a", "de", speech(1))).toThrow("No Parakeet model found.");
     // A new recording starts over: the model may have been installed meanwhile.
     expect(engine.append("b", "de", speech(1))).toBe("");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
     expect(attempts).toBe(2);
     expect(() => engine.append("b", "de", speech(1))).toThrow("No Parakeet model found.");
   });
@@ -173,7 +178,7 @@ describe("DictationEngine", () => {
     await engine.finish("b");
     advance(61_000);
     engine.housekeeping();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
     expect(engine.modelLoaded).toBe(false);
   });
 });

@@ -19,8 +19,9 @@ const FILLER_PATTERN = new RegExp(
   "giu",
 );
 const SENTENCE_END = ".!?…";
-const CAPITALIZE = "\u0000";
-const SENTENCE_END_MARK = "\u0001";
+// Private-use characters mark spots for the passes below; transcripts never contain them.
+const CAPITALIZE = "";
+const SENTENCE_END_MARK = "";
 
 export function removeFillers(text: string): string {
   let cleaned = text.replace(
@@ -40,9 +41,9 @@ export function removeFillers(text: string): string {
       return "";
     },
   );
-  cleaned = cleaned.replace(/[,;:]?\s*\u0001/gu, "");
+  cleaned = cleaned.replace(/[,;:]?\s*/gu, "");
   cleaned = cleaned.replace(
-    /\u0000[ \t]*([\p{L}\p{N}_])/gu,
+    /[ \t]*([\p{L}\p{N}_])/gu,
     (_match, first: string) => ` ${first.toUpperCase()}`,
   );
   cleaned = cleaned.replaceAll(CAPITALIZE, "");

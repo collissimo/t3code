@@ -1333,6 +1333,27 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:check-otlp-endpoint",
       tag: WS_METHODS.serverCheckOtlpEndpoint,
     }),
+    // Chunks of one recording must arrive in order, and the end of it after the last chunk.
+    dictationAppend: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:dictation:append",
+      tag: WS_METHODS.dictationAppend,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sessionId]),
+      },
+    }),
+    dictationFinish: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:dictation:finish",
+      tag: WS_METHODS.dictationFinish,
+    }),
+    dictationCancel: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:dictation:cancel",
+      tag: WS_METHODS.dictationCancel,
+    }),
+    dictationStructure: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:dictation:structure",
+      tag: WS_METHODS.dictationStructure,
+    }),
     retryResourceTelemetry: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:retry-resource-telemetry",
       tag: WS_METHODS.serverRetryResourceTelemetry,
