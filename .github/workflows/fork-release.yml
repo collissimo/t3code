@@ -97,6 +97,10 @@ jobs:
           cache: false
           run-install: false
 
+      - name: Install dependencies
+        if: steps.due.outputs.due == 'true'
+        run: vp install
+
       # Same scheme as upstream nightlies, so the app's nightly channel picks these up.
       - name: Resolve version
         if: steps.due.outputs.due == 'true'
@@ -112,10 +116,6 @@ jobs:
             --run-number "$RUN_NUMBER" \
             --sha "$BUILD_SHA" \
             --github-output
-
-      - name: Install dependencies
-        if: steps.due.outputs.due == 'true'
-        run: vp install
 
       - name: Install Spectre-mitigated MSVC libs
         if: steps.due.outputs.due == 'true'
