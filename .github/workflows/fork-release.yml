@@ -13,8 +13,6 @@ on:
   schedule:
     # Every six hours, a minute off the hour; a run without new commits ends after the check.
     - cron: "17 */6 * * *"
-  push: # TEMPORARY: test run before merge
-    branches: [t3/fork-releases]
   workflow_dispatch:
     inputs:
       force:
