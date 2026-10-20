@@ -102,7 +102,8 @@ jobs:
         timeout-minutes: 15
         run: vp install
 
-      # Same scheme as upstream nightlies, so the app's nightly channel picks these up.
+      # Same scheme as upstream nightlies, so the app's nightly channel picks these up. The run
+      # number is offset so a fork build sorts above an upstream nightly of the same day.
       - name: Resolve version
         if: steps.due.outputs.due == 'true'
         id: version
@@ -114,7 +115,7 @@ jobs:
           set -euo pipefail
           node scripts/resolve-nightly-release.ts \
             --date "$(date -u -d "$RUN_STARTED_AT" +%Y%m%d)" \
-            --run-number "$RUN_NUMBER" \
+            --run-number "$((10000 + RUN_NUMBER))" \
             --sha "$BUILD_SHA" \
             --github-output
 
@@ -126,7 +127,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       # Upstream installs Spectre-mitigated MSVC libs first; only the build script's preflight
-      # asks for them, and a reused monitor skips that check. The VS installer hangs on these runners.
+      # asks for them, and a reused monitor skips that check. The VS installer took minutes there.
       - name: Build resource monitor
         if: steps.due.outputs.due == 'true'
         timeout-minutes: 15

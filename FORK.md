@@ -48,8 +48,8 @@ official Nightly would update to upstream and lose the fork features.
 
 `.github/workflows/fork-release.yml` (`windows-latest`, every 6 hours and on dispatch) merges
 `upstream/main` into `collin/main` for the build only, skips when the last release already has
-both commits, and publishes a prerelease `v<x.y.z>-nightly.<date>.<run>` with the NSIS installer,
-blockmap and `nightly.yml`. The version scheme is upstream's, so the app's nightly channel
+both commits, and publishes a prerelease `v<x.y.z>-nightly.<date>.<10000 + run>` with the NSIS installer,
+blockmap and `nightly.yml`. The version scheme is upstream's (the offset sorts a fork build above an upstream nightly of the same day), so the app's nightly channel
 takes it. A merge conflict fails the run; sync `collin/main` by hand, then
 `gh workflow run fork-release.yml`. `-f force=true` builds without new commits.
 
