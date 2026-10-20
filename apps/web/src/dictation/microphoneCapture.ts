@@ -15,7 +15,8 @@ export interface MicrophoneCapture {
   readonly stop: () => void;
 }
 
-const WORKLET_URL = "dictation-capture-worklet.js";
+// From the app root, not the current route: /<thread>/x.js would hit the SPA fallback.
+const WORKLET_URL = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/dictation-capture-worklet.js`;
 
 export async function startMicrophoneCapture(): Promise<MicrophoneCapture> {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -51,7 +52,7 @@ export async function startMicrophoneCapture(): Promise<MicrophoneCapture> {
   const context = new AudioContext();
   const blocks: Array<Float32Array> = [];
   try {
-    await context.audioWorklet.addModule(new URL(WORKLET_URL, document.baseURI).href);
+    await context.audioWorklet.addModule(WORKLET_URL);
     const source = context.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(context, "dictation-capture");
     node.port.addEventListener("message", (event: MessageEvent<Float32Array>) => {
