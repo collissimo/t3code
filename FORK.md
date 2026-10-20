@@ -7,7 +7,8 @@ Personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). Upstre
 
 - `main`: pristine mirror of `upstream/main`. Never commit here; fast-forward only.
 - `collin/main`: `main` + own changes. Work branches start here, PRs target here.
-- Nightly builds are just `v*-nightly.*` tags on upstream `main`, not a separate repo.
+- Upstream nightly builds are just `v*-nightly.*` tags on upstream `main`, not a separate repo.
+  The fork publishes its own (see Desktop builds).
 
 ## Remotes
 
@@ -38,6 +39,27 @@ Merge, not rebase: history stays stable, no force-push needed.
 
 `fork/pre-push` blocks any push to `main` that is not exactly `upstream/main`. Hooks are not
 versioned; install per clone: `cp fork/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"`.
+
+## Desktop builds
+
+The installed app is a fork build, so the update button stays on the fork. The desktop app looks
+for updates in the repository it was built in (`app-update.yml`, from `GITHUB_REPOSITORY`); an
+official Nightly would update to upstream and lose the fork features.
+
+`.github/workflows/fork-release.yml` (`windows-latest`, every 6 hours and on dispatch) merges
+`upstream/main` into `collin/main` for the build only, skips when the last release already has
+both commits, and publishes a prerelease `v<x.y.z>-nightly.<date>.<10000 + run>` with the NSIS installer,
+blockmap and `nightly.yml`. The version scheme is upstream's (the offset sorts a fork build above an upstream nightly of the same day), so the app's nightly channel
+takes it. A merge conflict fails the run; sync `collin/main` by hand, then
+`gh workflow run fork-release.yml`. `-f force=true` builds without new commits.
+
+- Windows x64 only, unsigned (SmartScreen warns on the first install; updates do not verify a
+  publisher), without the WSL runtime upstream bundles.
+- T3 Connect needs the public relay and Clerk values that upstream bakes in. They are repository
+  variables here: `T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`,
+  `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. Upstream's telemetry tokens are deliberately not copied.
+- The tag sits on the `collin/main` commit; the release notes name the fork and upstream commits
+  the build merged.
 
 ## Keeping changes mergeable
 
