@@ -53,8 +53,14 @@ Windows x64 (NSIS, `nightly.yml`) and Linux x64 (AppImage, `nightly-linux.yml`) 
 publishes both in one prerelease `v<x.y.z>-nightly.<date>.<10000 + run>`. The version scheme is
 upstream's (the offset sorts a fork build above an upstream nightly of the same day), so the app's
 nightly channel takes it, and a fork client and fork server on the other OS stay on the same
-version. A merge conflict fails the run; sync `collin/main` by hand, then
-`gh workflow run fork-release.yml`. `-f force=true` builds without new commits.
+version. `-f force=true` builds without new commits.
+
+A merge conflict is resolved by Claude Code (`fork/resolve-conflicts.sh`, Opus, at most $5 per
+run) for the build only; the typecheck job still gates the release. It needs the repository secret
+`ANTHROPIC_API_KEY` (API credits) or `CLAUDE_CODE_OAUTH_TOKEN` (subscription, from
+`claude setup-token`). Each fork/upstream pair is resolved once and cached, so hourly retries cost
+nothing. When Claude cannot resolve it, every run of that pair fails: sync `collin/main` by hand,
+then `gh workflow run fork-release.yml` (`-f force=true` asks Claude again instead).
 
 - Every machine must run a fork build once (installed by hand); from then on the update button,
   including "update everything" for connected servers, stays on the fork. A desktop app on the
