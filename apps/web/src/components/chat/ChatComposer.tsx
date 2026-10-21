@@ -5806,7 +5806,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const insertComposerTextAtEndStable = useStableCallback(insertComposerTextAtEnd);
 
   const dictation = useDictation({
-    environmentId,
+    // The speech model runs where the microphone is: on this machine's own server when there is
+    // one, not on the remote environment the thread may belong to.
+    environmentId: primaryEnvironmentId ?? environmentId,
     insert: (text) =>
       insertComposerTextStable(`${text} `, "cursor", { ensureLeadingBoundary: true }),
   });
@@ -7328,6 +7330,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <ComposerDictationButton
                     state={dictation.state}
                     onToggle={toggleDictationStable}
+                    language={dictation.language}
+                    onLanguageChange={dictation.setLanguage}
                     dictateShortcutLabel={shortcutLabelForCommand(keybindings, "composer.dictate")}
                     structuredShortcutLabel={shortcutLabelForCommand(
                       keybindings,

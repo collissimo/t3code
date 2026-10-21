@@ -1,5 +1,12 @@
-import { LoaderCircleIcon, MicIcon, SparklesIcon } from "lucide-react";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  LoaderCircleIcon,
+  MicIcon,
+  SparklesIcon,
+} from "lucide-react";
 
+import { DICTATION_LANGUAGES } from "../../dictation/dictationLanguages";
 import type { DictationState } from "../../dictation/useDictation";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -12,14 +19,28 @@ const NOTICE_TONES = {
   error: "text-destructive",
 } as const;
 
-/** Mic button in the composer footer, with the live transcript and status floating above it. */
+/**
+ * Mic button in the composer footer, with the live transcript and status floating above it and
+ * the spoken language, switched with the arrows, below it.
+ */
 export function ComposerDictationButton(props: {
   readonly state: DictationState;
   readonly onToggle: (structured: boolean) => void;
   readonly dictateShortcutLabel: string | null;
   readonly structuredShortcutLabel: string | null;
+  readonly language: string;
+  readonly onLanguageChange: (language: string) => void;
 }) {
   const { phase, preview, structured, notice } = props.state;
+  const languageIndex = Math.max(
+    0,
+    DICTATION_LANGUAGES.findIndex((entry) => entry.code === props.language),
+  );
+  const language = DICTATION_LANGUAGES[languageIndex]!;
+  const switchLanguage = (step: number) => {
+    const count = DICTATION_LANGUAGES.length;
+    props.onLanguageChange(DICTATION_LANGUAGES[(languageIndex + step + count) % count]!.code);
+  };
   const recording = phase === "recording";
   const busy = phase === "starting" || phase === "transcribing" || phase === "structuring";
   const status = recording
@@ -55,7 +76,7 @@ export function ComposerDictationButton(props: {
         .join(" · ");
 
   return (
-    <div className="relative">
+    <div className="relative flex flex-col items-center">
       {status !== null || notice !== null ? (
         <div
           role="status"
@@ -112,6 +133,34 @@ export function ComposerDictationButton(props: {
         </TooltipTrigger>
         <TooltipPopup>{tooltip}</TooltipPopup>
       </Tooltip>
+      <div className="flex items-center">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-tiny"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => switchLanguage(-1)}
+          disabled={phase !== "idle"}
+          aria-label="Previous dictation language"
+        >
+          <ChevronLeftIcon />
+        </Button>
+        <svg viewBox="0 0 18 12" className="h-2.5 w-[15px] rounded-[1px]" role="img">
+          <title>{language.name}</title>
+          {language.flag}
+        </svg>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-tiny"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => switchLanguage(1)}
+          disabled={phase !== "idle"}
+          aria-label="Next dictation language"
+        >
+          <ChevronRightIcon />
+        </Button>
+      </div>
     </div>
   );
 }

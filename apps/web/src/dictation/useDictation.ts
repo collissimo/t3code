@@ -1,6 +1,9 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
+
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 
 import { randomUUID } from "~/lib/utils";
 import { serverEnvironment } from "../state/server";
@@ -10,12 +13,14 @@ import {
   startMicrophoneCapture,
   type MicrophoneCapture,
 } from "./microphoneCapture";
+import { defaultDictationLanguage } from "./dictationLanguages";
 
 // Dictation into the composer: the microphone is recorded here and streamed to the server,
 // whose local speech model writes the transcript. On request (the structured shortcut, or
 // "Reinschrift" spoken at the end) a small model rewrites it into a structured prompt first.
 
 const SEND_INTERVAL_MS = 500;
+const LANGUAGE_KEY = "t3code:dictation-language";
 
 export type DictationPhase = "idle" | "starting" | "recording" | "transcribing" | "structuring";
 
@@ -58,6 +63,11 @@ export function useDictation(input: {
   const finish = useAtomCommand(serverEnvironment.dictationFinish, { reportFailure: false });
   const cancelSession = useAtomCommand(serverEnvironment.dictationCancel, { reportFailure: false });
   const structure = useAtomCommand(serverEnvironment.dictationStructure, { reportFailure: false });
+  const [language, setLanguage] = useLocalStorage(
+    LANGUAGE_KEY,
+    defaultDictationLanguage(navigator.language),
+    Schema.String,
+  );
   const [state, setRenderedState] = useState<DictationState>(IDLE);
   // Callbacks read the state they act on from here, not from a render that may be stale.
   const stateRef = useRef(state);
@@ -72,8 +82,10 @@ export function useDictation(input: {
   // The plain transcript while it is being rewritten, for Esc to insert instead.
   const unstructuredRef = useRef<string | null>(null);
   const inputRef = useRef(input);
+  const languageRef = useRef(language);
   useEffect(() => {
     inputRef.current = input;
+    languageRef.current = language;
   });
 
   const update = (next: Partial<DictationState>) => {
@@ -104,7 +116,7 @@ export function useDictation(input: {
       if (!ok) return false;
       const result = await append({
         environmentId,
-        input: { sessionId: recording.sessionId, language: navigator.language, pcm },
+        input: { sessionId: recording.sessionId, language: languageRef.current, pcm },
       });
       if (result._tag === "Failure") {
         recording.failed = failureText(result);
@@ -281,5 +293,5 @@ export function useDictation(input: {
     [],
   );
 
-  return { state, toggle, cancel };
+  return { state, toggle, cancel, language, setLanguage };
 }

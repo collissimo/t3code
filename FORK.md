@@ -83,7 +83,11 @@ shift-click, or ending with the word "Reinschrift") to get a structured prompt, 
 cancel a recording or to insert the plain transcript while it is being rewritten. Both keys
 can be rebound in Settings → Keybindings ("Composer: Dictate").
 
-- Speech recognition runs on the server's machine: Parakeet TDT 0.6b v3 through
+- The flag under the mic button is the spoken language; the arrows beside it switch it
+  (German, English, French, Spanish, Italian, Dutch, Polish). The choice is kept per client.
+- Speech recognition runs on the client's own machine when it has a local server (the desktop
+  app), otherwise on the server the client is served from, even for threads on a remote
+  environment: Parakeet TDT 0.6b v3 through
   [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (`transcribe-cpp` npm
   package). Nothing is downloaded; the `.gguf` model Scrawl
   (`%LOCALAPPDATA%\Scrawl\models`) or Hex (`%APPDATA%\voice-control\models`) installed is used.
