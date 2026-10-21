@@ -237,8 +237,10 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-  # The tag goes on the fork branch: pushing the merge itself would need workflow-write rights,
-  # which GITHUB_TOKEN never has when upstream touched .github/workflows.
+  # The tag goes on the fork branch's current head: pushing the merge itself would need
+  # workflow-write rights, which GITHUB_TOKEN never has when upstream touched .github/workflows,
+  # and GitHub refuses the same for a tag on an older fork commit whose workflows differ from the
+  # head's (a fork commit pushed during the build). The release notes record what was built.
   publish:
     needs: [prepare, build]
     runs-on: ubuntu-latest
@@ -267,7 +269,7 @@ jobs:
             "Upstream: $UPSTREAM_SHA")
           gh release create "$TAG" publish/* \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$FORK_SHA" \
+            --target "$FORK_BRANCH" \
             --title "T3 Code Nightly $VERSION (fork)" \
             --notes "$notes" \
             --prerelease
