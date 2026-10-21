@@ -1,9 +1,11 @@
-# Fork releases: Windows x64 nightlies of upstream main with this fork's features merged in.
+# Fork releases: Windows x64 and Linux x64 nightlies of upstream main with this fork's features
+# merged in.
 #
 # The desktop app looks for updates in the repository it was built in (GITHUB_REPOSITORY ends up
 # in app-update.yml), so a build from here keeps updating from here and the update button never
 # trades the fork for a plain upstream build. Upstream's release.yml needs runners and secrets a
-# fork does not have; this is the one job a Windows install needs.
+# fork does not have; this builds only what this fork's installs need. Both platforms share one
+# release and version, so a fork client and a fork server on the other OS update in step.
 #
 # collin/main is merged with upstream/main for the build only; nothing is pushed to a branch.
 # A merge conflict fails the run (and GitHub mails the owner): then sync collin/main by hand.
@@ -27,18 +29,22 @@ concurrency:
   group: fork-release
   cancel-in-progress: false
 
+env:
+  FORK_BRANCH: collin/main
+  UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
+  GH_TOKEN: ${{ github.token }}
+
 jobs:
-  release:
+  prepare:
     if: github.repository != 'pingdotgg/t3code'
-    runs-on: windows-latest
-    timeout-minutes: 120
-    defaults:
-      run:
-        shell: bash
-    env:
-      FORK_BRANCH: collin/main
-      UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
-      GH_TOKEN: ${{ github.token }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      due: ${{ steps.due.outputs.due }}
+      fork_sha: ${{ steps.merge.outputs.fork_sha }}
+      upstream_sha: ${{ steps.merge.outputs.upstream_sha }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
       - name: Merge upstream into the fork
@@ -65,7 +71,6 @@ jobs:
           fi
           echo "fork_sha=$fork_sha" >> "$GITHUB_OUTPUT"
           echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
-          echo "build_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Skip when the last release has the same commits
         id: due
@@ -87,8 +92,68 @@ jobs:
             echo "due=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Setup Vite+
+      # Upstream's nightly scheme (scripts/resolve-nightly-release.ts: next patch of the desktop
+      # version), so the app's nightly channel takes these. The run number is offset so a fork
+      # build sorts above an upstream nightly of the same day.
+      - name: Resolve version
         if: steps.due.outputs.due == 'true'
+        id: version
+        env:
+          RUN_STARTED_AT: ${{ github.run_started_at }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          base=$(node -p "require('./apps/desktop/package.json').version.replace(/[-+].*$/, '').split('.').map((part, index) => index === 2 ? Number(part) + 1 : part).join('.')")
+          version="${base}-nightly.$(date -u -d "$RUN_STARTED_AT" +%Y%m%d).$((10000 + RUN_NUMBER))"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.due == 'true'
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - label: Windows x64
+            runner: windows-latest
+            platform: win
+            target: nsis
+            assets: release/*.exe release/*.blockmap release/nightly.yml
+          - label: Linux x64
+            runner: ubuntu-latest
+            platform: linux
+            target: AppImage
+            assets: release/*.AppImage release/*.blockmap release/nightly-linux.yml
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Check out the merge
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch -q --no-tags origin "$FORK_SHA"
+          git fetch -q --no-tags upstream "$UPSTREAM_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
+          git merge -q --no-edit -m "Merge upstream main ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"
+
+      - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
@@ -96,89 +161,93 @@ jobs:
           run-install: false
 
       - name: Install dependencies
-        if: steps.due.outputs.due == 'true'
         timeout-minutes: 15
         run: vp install
 
-      # Same scheme as upstream nightlies, so the app's nightly channel picks these up. The run
-      # number is offset so a fork build sorts above an upstream nightly of the same day.
-      - name: Resolve version
-        if: steps.due.outputs.due == 'true'
-        id: version
-        env:
-          BUILD_SHA: ${{ steps.merge.outputs.build_sha }}
-          RUN_STARTED_AT: ${{ github.run_started_at }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          set -euo pipefail
-          node scripts/resolve-nightly-release.ts \
-            --date "$(date -u -d "$RUN_STARTED_AT" +%Y%m%d)" \
-            --run-number "$((10000 + RUN_NUMBER))" \
-            --sha "$BUILD_SHA" \
-            --github-output
-
       - name: Setup Rust
-        if: steps.due.outputs.due == 'true'
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.platform == 'win' && 'x86_64-pc-windows-msvc' || 'x86_64-unknown-linux-gnu' }}
+
+      - name: Install Linux desktop build libraries
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsecret-1-dev pkg-config imagemagick
 
       # Upstream installs Spectre-mitigated MSVC libs first; only the build script's preflight
       # asks for them, and a reused monitor skips that check. The VS installer took minutes there.
       - name: Build resource monitor
-        if: steps.due.outputs.due == 'true'
+        if: matrix.platform == 'win'
         timeout-minutes: 15
         run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-pc-windows-msvc
 
       - name: Set package versions
-        if: steps.due.outputs.due == 'true'
-        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+        run: node scripts/update-release-package-versions.ts "$VERSION"
 
       # Unsigned, and without the WSL runtime upstream bundles from its Linux CLI build.
       # T3 Connect needs the public relay and Clerk values; they come from repository variables.
       - name: Build desktop artifact
-        if: steps.due.outputs.due == 'true'
         timeout-minutes: 45
         env:
-          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: true
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: ${{ matrix.platform == 'win' }}
           T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
           T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
           T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
           T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
         run: |
           vp run dist:desktop:artifact \
-            --platform win --target nsis --arch x64 \
-            --build-version "${{ steps.version.outputs.version }}" \
+            --platform ${{ matrix.platform }} --target ${{ matrix.target }} --arch x64 \
+            --build-version "$VERSION" \
             --verbose
 
-      - name: Check update feed
-        if: steps.due.outputs.due == 'true'
+      - name: Collect release assets
         run: |
           set -euo pipefail
           ls -la release
-          grep -q "version: ${{ steps.version.outputs.version }}" release/nightly.yml
-          cat release/nightly.yml
+          mkdir publish
+          cp ${{ matrix.assets }} publish/
+          feed=$(ls publish/*.yml)
+          grep -q "version: $VERSION" "$feed"
+          cat "$feed"
 
-      # The tag goes on the fork branch: pushing the merge itself would need workflow-write rights,
-      # which GITHUB_TOKEN never has when upstream touched .github/workflows.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: publish/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  # The tag goes on the fork branch: pushing the merge itself would need workflow-write rights,
+  # which GITHUB_TOKEN never has when upstream touched .github/workflows.
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-*
+          path: publish
+          merge-multiple: true
+
       - name: Publish release
-        if: steps.due.outputs.due == 'true'
         env:
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-          FORK_SHA: ${{ steps.merge.outputs.fork_sha }}
-          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          assets=(release/*.exe release/*.blockmap release/nightly.yml)
+          ls -la publish
           notes=$(printf '%s\n' \
-            "Windows x64 build of upstream main with the fork's features (see FORK.md). Unsigned." \
+            "Windows x64 and Linux x64 builds of upstream main with the fork's features (see FORK.md). Unsigned." \
             "" \
             "Fork: $FORK_SHA" \
             "Upstream: $UPSTREAM_SHA")
-          gh release create "$TAG" "${assets[@]}" \
+          gh release create "$TAG" publish/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$FORK_SHA" \
             --title "T3 Code Nightly $VERSION (fork)" \

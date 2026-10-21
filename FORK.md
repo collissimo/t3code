@@ -46,15 +46,21 @@ The installed app is a fork build, so the update button stays on the fork. The d
 for updates in the repository it was built in (`app-update.yml`, from `GITHUB_REPOSITORY`); an
 official Nightly would update to upstream and lose the fork features.
 
-`.github/workflows/fork-release.yml` (`windows-latest`, every 6 hours and on dispatch) merges
-`upstream/main` into `collin/main` for the build only, skips when the last release already has
-both commits, and publishes a prerelease `v<x.y.z>-nightly.<date>.<10000 + run>` with the NSIS installer,
-blockmap and `nightly.yml`. The version scheme is upstream's (the offset sorts a fork build above an upstream nightly of the same day), so the app's nightly channel
-takes it. A merge conflict fails the run; sync `collin/main` by hand, then
+`.github/workflows/fork-release.yml` (every 6 hours and on dispatch) merges `upstream/main` into
+`collin/main` for the build only, skips when the last release already has both commits, builds
+Windows x64 (NSIS, `nightly.yml`) and Linux x64 (AppImage, `nightly-linux.yml`) side by side, and
+publishes both in one prerelease `v<x.y.z>-nightly.<date>.<10000 + run>`. The version scheme is
+upstream's (the offset sorts a fork build above an upstream nightly of the same day), so the app's
+nightly channel takes it, and a fork client and fork server on the other OS stay on the same
+version. A merge conflict fails the run; sync `collin/main` by hand, then
 `gh workflow run fork-release.yml`. `-f force=true` builds without new commits.
 
-- Windows x64 only, unsigned (SmartScreen warns on the first install; updates do not verify a
-  publisher), without the WSL runtime upstream bundles.
+- Every machine must run a fork build once (installed by hand); from then on the update button,
+  including "update everything" for connected servers, stays on the fork. A desktop app on the
+  other feed (an official build) is never offered a server update from a fork client: it could
+  not reach the fork version.
+- Unsigned (SmartScreen warns on the first Windows install; updates do not verify a publisher),
+  without the WSL runtime upstream bundles into the Windows app.
 - T3 Connect needs the public relay and Clerk values that upstream bakes in. They are repository
   variables here: `T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`,
   `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. Upstream's telemetry tokens are deliberately not copied.
@@ -82,6 +88,7 @@ can be rebound in Settings → Keybindings ("Composer: Dictate").
   package). Nothing is downloaded; the `.gguf` model Scrawl
   (`%LOCALAPPDATA%\Scrawl\models`) or Hex (`%APPDATA%\voice-control\models`) installed is used.
   `T3CODE_DICTATION_MODEL=<path to .gguf>` picks another one.
+  Without Scrawl or Hex, `fork/install-parakeet.ps1` downloads the model into Scrawl's folder.
 - The model (~1.1 GB) loads on the first chunk of a recording and is let go after 15 minutes
   without one.
 - Structuring calls `claude --print --model haiku` on the server; it needs a logged-in
