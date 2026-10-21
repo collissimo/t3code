@@ -3,8 +3,8 @@ import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
 import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
 
 import {
+  resolveServerConfigVersionMismatch,
   resolveServerSelfUpdateCapability,
-  resolveVersionMismatch,
   supportsDesktopAppUpdate,
   supportsServerUpdateThreadContinuation,
 } from "~/versionSkew";
@@ -75,10 +75,7 @@ export function collectServerUpdateTargets(
   for (const machine of machines) {
     const config = machine.serverConfig;
     if (machine.hostedByThisApp) continue;
-    if (
-      config !== null &&
-      resolveVersionMismatch(config.environment.serverVersion, targetVersion) === null
-    ) {
+    if (config !== null && resolveServerConfigVersionMismatch(config, targetVersion) === null) {
       continue;
     }
     const skip = (reason: string) =>

@@ -77,10 +77,27 @@ export function resolveVersionMismatch(
   };
 }
 
+// Fork nightlies number their runs from 10000 (.github/workflows/fork-release.yml).
+function isForkBuild(version: string): boolean {
+  const prerelease = parseSemver(version)?.prerelease;
+  return prerelease?.[0] === "nightly" && Number(prerelease[2]) >= 10_000;
+}
+
 export function resolveServerConfigVersionMismatch(
   serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
+  clientVersion: string = APP_VERSION,
 ): VersionMismatch | null {
-  return resolveVersionMismatch(serverConfig?.environment.serverVersion);
+  const serverVersion = serverConfig?.environment.serverVersion;
+  // A desktop app updates only from the feed it was built for, so a desktop-managed server on
+  // the other feed (fork vs upstream) can never reach this client's version.
+  if (
+    serverVersion !== undefined &&
+    resolveServerSelfUpdateCapability(serverConfig) === "desktop-managed" &&
+    isForkBuild(serverVersion) !== isForkBuild(clientVersion)
+  ) {
+    return null;
+  }
+  return resolveVersionMismatch(serverVersion, clientVersion);
 }
 
 export function resolveServerSelfUpdateCapability(

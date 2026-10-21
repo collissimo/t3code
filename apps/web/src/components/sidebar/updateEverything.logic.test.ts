@@ -106,6 +106,19 @@ describe("collectServerUpdateTargets", () => {
       ["manual", "needs a manual update"],
     ]);
   });
+
+  it("leaves out desktop apps that update from the other feed (fork vs upstream)", () => {
+    const { targets, skipped } = collectServerUpdateTargets(
+      [
+        machine("upstream-desktop", "0.1.2-nightly.20261021.3457", "desktop-managed"),
+        machine("old-fork-desktop", "0.1.1-nightly.20261020.10005", "desktop-managed"),
+      ],
+      "0.1.2-nightly.20261021.10006",
+    );
+
+    expect(targets.map((target) => target.serverLabel)).toEqual(["old-fork-desktop"]);
+    expect(skipped).toEqual([]);
+  });
 });
 
 describe("collectRestartingMachines", () => {
