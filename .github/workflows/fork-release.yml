@@ -10,8 +10,10 @@
 # Each build is collin/main merged with the commit of upstream's newest nightly, so the fork
 # follows upstream release by release. GitHub cannot wake a fork when upstream publishes, so a
 # cheap check runs every hour and builds only when that nightly or collin/main is new.
-# Nothing is pushed to a branch. A merge conflict fails the run (and GitHub mails the owner):
-# then sync collin/main by hand.
+# Nothing is pushed to a branch. Claude Code resolves a merge conflict for the build only
+# (fork/resolve-conflicts.sh, with the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret);
+# collin/main itself is still synced by fork/sync.sh. When Claude cannot resolve it, the run fails
+# (and GitHub mails the owner): then sync collin/main by hand.
 name: Fork release
 
 on:
@@ -41,7 +43,7 @@ jobs:
   prepare:
     if: github.repository != 'pingdotgg/t3code'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     outputs:
       due: ${{ steps.due.outputs.due }}
       fork_sha: ${{ steps.refs.outputs.fork_sha }}
@@ -87,6 +89,7 @@ jobs:
 
       # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
       - name: Merge upstream into the fork
+        id: merge
         if: steps.due.outputs.due == 'true'
         env:
           GIT_TERMINAL_PROMPT: "0"
@@ -103,11 +106,101 @@ jobs:
           git fetch -q --no-tags upstream "$UPSTREAM_SHA"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
-          if ! git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"; then
-            git diff --name-only --diff-filter=U | sed 's/^/::error::conflict: /'
-            echo "::error::upstream no longer merges cleanly into $FORK_BRANCH; sync it by hand"
+          if git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U | sed 's/^/::warning::conflict: /'
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # One resolution per fork/upstream pair: a failed build leaves the pair due again every hour,
+      # and a retry must neither pay for nor re-roll the resolution. force asks Claude again.
+      - name: Restore an earlier resolution of these commits
+        id: earlier
+        if: steps.merge.outputs.conflict == 'true' && !inputs.force
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/resolution
+          key: fork-merge-${{ steps.refs.outputs.fork_sha }}-${{ steps.refs.outputs.upstream_sha }}
+
+      - name: Resolve conflicts with Claude
+        if: steps.merge.outputs.conflict == 'true' && steps.earlier.outputs.cache-hit != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISABLE_AUTOUPDATER: "1"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          FORK_SHA: ${{ steps.refs.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          [[ -n "$ANTHROPIC_API_KEY" ]] || unset ANTHROPIC_API_KEY
+          [[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]] || unset CLAUDE_CODE_OAUTH_TOKEN
+          if [[ -z "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+            echo "::error::upstream no longer merges cleanly into $FORK_BRANCH and neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set; sync it by hand"
             exit 1
           fi
+          resolution="$RUNNER_TEMP/resolution"
+          mkdir -p "$resolution"
+          npm install -g --silent @anthropic-ai/claude-code@2.1.306
+          # The script of this workflow's commit, which differs from collin/main's on a dispatch from a branch.
+          git fetch -q --no-tags origin "$GITHUB_SHA"
+          git show "$GITHUB_SHA:fork/resolve-conflicts.sh" > "$RUNNER_TEMP/resolve-conflicts.sh"
+          if bash "$RUNNER_TEMP/resolve-conflicts.sh"; then
+            git bundle create -q "$resolution/merge.bundle" HEAD "^$FORK_SHA" "^$UPSTREAM_SHA"
+          else
+            touch "$resolution/failed"
+          fi
+
+      - name: Remember the resolution
+        if: steps.merge.outputs.conflict == 'true' && steps.earlier.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/resolution
+          key: fork-merge-${{ steps.refs.outputs.fork_sha }}-${{ steps.refs.outputs.upstream_sha }}
+
+      - name: Apply the resolution
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          CACHE_HIT: ${{ steps.earlier.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          resolution="$RUNNER_TEMP/resolution"
+          if [[ -f "$resolution/failed" ]]; then
+            echo "::error::Claude could not resolve the conflicts with upstream (see the first run of these commits); sync $FORK_BRANCH by hand, or rerun with force"
+            exit 1
+          fi
+          if [[ "$CACHE_HIT" == "true" ]]; then
+            git merge --abort
+            git fetch -q --no-tags "$resolution/merge.bundle"
+            git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
+          fi
+          git log -1 --format='Merge %H'
+
+      # The merge commit differs per job (timestamps) and a resolution must not be re-rolled, so the
+      # build jobs check out this exact commit. The sha file keeps the artifact non-empty when
+      # the merge is a plain fork or upstream commit, which they fetch anyway.
+      - name: Bundle the merge
+        if: steps.due.outputs.due == 'true'
+        env:
+          FORK_SHA: ${{ steps.refs.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/merge"
+          merge_sha=$(git rev-parse HEAD)
+          echo "$merge_sha" > "$RUNNER_TEMP/merge/sha"
+          if [[ "$merge_sha" != "$FORK_SHA" && "$merge_sha" != "$UPSTREAM_SHA" ]]; then
+            git bundle create -q "$RUNNER_TEMP/merge/merge.bundle" HEAD "^$FORK_SHA" "^$UPSTREAM_SHA"
+          fi
+
+      - if: steps.due.outputs.due == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: merge
+          path: ${{ runner.temp }}/merge
+          if-no-files-found: error
+          retention-days: 1
 
       # Upstream's nightly scheme (scripts/resolve-nightly-release.ts: next patch of the desktop
       # version), so the app's nightly channel takes these. The run number is offset so a fork
@@ -134,6 +227,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: merge
+          path: ${{ runner.temp }}/merge
+
       - name: Check out the merge
         env:
           GIT_TERMINAL_PROMPT: "0"
@@ -141,16 +239,17 @@ jobs:
           UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
         run: |
           set -euo pipefail
+          merge="$RUNNER_TEMP/merge"
           git init -q .
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git remote add upstream "$UPSTREAM_URL"
           git fetch -q --no-tags origin "$FORK_SHA"
           git fetch -q --no-tags upstream "$UPSTREAM_SHA"
+          if [[ -f "$merge/merge.bundle" ]]; then
+            git fetch -q --no-tags "$merge/merge.bundle"
+          fi
           git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
-          git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"
+          git -c checkout.workers=0 checkout -q --detach "$(cat "$merge/sha")"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
@@ -196,6 +295,11 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: merge
+          path: ${{ runner.temp }}/merge
+
       - name: Check out the merge
         env:
           GIT_TERMINAL_PROMPT: "0"
@@ -203,16 +307,17 @@ jobs:
           UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
         run: |
           set -euo pipefail
+          merge="$RUNNER_TEMP/merge"
           git init -q .
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git remote add upstream "$UPSTREAM_URL"
           git fetch -q --no-tags origin "$FORK_SHA"
           git fetch -q --no-tags upstream "$UPSTREAM_SHA"
+          if [[ -f "$merge/merge.bundle" ]]; then
+            git fetch -q --no-tags "$merge/merge.bundle"
+          fi
           git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
-          git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"
+          git -c checkout.workers=0 checkout -q --detach "$(cat "$merge/sha")"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
