@@ -12,6 +12,7 @@ import {
   type TranscribeModule,
 } from "./DictationEngine.ts";
 import { findModel, rankModels } from "./modelFiles.ts";
+import { handleDictationWorkerRequest } from "./worker.ts";
 
 const V3 = "C:/models/parakeet-tdt-0.6b-v3-Q8_0.gguf";
 const UNIFIED_EN = "C:/models/parakeet-unified-en-0.6b-Q8_0.gguf";
@@ -180,5 +181,48 @@ describe("DictationEngine", () => {
     engine.housekeeping();
     await flushMicrotasks();
     expect(engine.modelLoaded).toBe(false);
+  });
+});
+
+describe("dictation worker", () => {
+  const pcm = (seconds: number) => {
+    const bytes = Buffer.alloc(seconds * SAMPLE_RATE * 2);
+    for (let offset = 0; offset < bytes.length; offset += 2) bytes.writeInt16LE(8192, offset);
+    return bytes.toString("base64");
+  };
+
+  it("answers each request by id with a cleaned transcript", async () => {
+    const { engine } = makeEngine();
+    const appended = await handleDictationWorkerRequest(engine, {
+      id: 1,
+      method: "append",
+      sessionId: "a",
+      language: "de",
+      pcm: pcm(1),
+    });
+    expect(appended).toEqual({ id: 1, ok: true, value: { preview: "" } });
+    expect(
+      await handleDictationWorkerRequest(engine, { id: 2, method: "finish", sessionId: "a" }),
+    ).toEqual({ id: 2, ok: true, value: { text: "Hallo Welt", structureRequested: false } });
+  });
+
+  it("turns an engine failure into a reason instead of crashing", async () => {
+    const { engine } = makeEngine(async () => {
+      throw new Error("No Parakeet model found.");
+    });
+    const request = {
+      id: 3,
+      method: "append",
+      sessionId: "a",
+      language: "de",
+      pcm: pcm(1),
+    } as const;
+    await handleDictationWorkerRequest(engine, request);
+    await flushMicrotasks();
+    expect(await handleDictationWorkerRequest(engine, { ...request, id: 4 })).toEqual({
+      id: 4,
+      ok: false,
+      reason: "No Parakeet model found.",
+    });
   });
 });

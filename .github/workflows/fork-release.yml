@@ -126,6 +126,50 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "Version $version"
 
+  # vp pack does not typecheck, so a type error would otherwise ship. Only the apps the desktop
+  # build bundles; publish waits for this.
+  typecheck:
+    needs: prepare
+    if: needs.prepare.outputs.due == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the merge
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch -q --no-tags origin "$FORK_SHA"
+          git fetch -q --no-tags upstream "$UPSTREAM_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
+          git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: vp install
+
+      - name: Typecheck server, desktop and web
+        run: |
+          set -euo pipefail
+          for app in server desktop web; do
+            (cd "apps/$app" && vp run typecheck)
+          done
+
   build:
     needs: prepare
     if: needs.prepare.outputs.due == 'true'
@@ -242,7 +286,7 @@ jobs:
   # and GitHub refuses the same for a tag on an older fork commit whose workflows differ from the
   # head's (a fork commit pushed during the build). The release notes record what was built.
   publish:
-    needs: [prepare, build]
+    needs: [prepare, typecheck, build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

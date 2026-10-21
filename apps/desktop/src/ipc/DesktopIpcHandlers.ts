@@ -13,6 +13,7 @@ import {
   getLocalEnvironmentEnabled,
   setLocalEnvironmentEnabled,
 } from "./methods/localEnvironment.ts";
+import { dictationAppend, dictationCancel, dictationFinish } from "./methods/dictation.ts";
 import {
   getAdvertisedEndpoints,
   getServerExposureState,
@@ -102,6 +103,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handleSync(getLocalEnvironmentEnabled);
   yield* ipc.handle(setLocalEnvironmentEnabled);
+  yield* ipc.handle(dictationAppend);
+  yield* ipc.handle(dictationFinish);
+  yield* ipc.handle(dictationCancel);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 
   yield* ipc.handle(getClientSettings);

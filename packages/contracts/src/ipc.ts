@@ -11,6 +11,14 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import type {
+  DesktopDictationOutcome,
+  DictationAppendInput,
+  DictationAppendResult,
+  DictationCancelInput,
+  DictationFinishInput,
+  DictationFinishResult,
+} from "./dictation.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -1049,6 +1057,14 @@ export interface DesktopBridge {
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
   getLocalEnvironmentEnabled?: () => boolean;
   setLocalEnvironmentEnabled?: (enabled: boolean) => Promise<void>;
+  /** Dictation on this computer, in the app's own worker, whatever environment a thread is on. */
+  dictationAppend?: (
+    input: DictationAppendInput,
+  ) => Promise<DesktopDictationOutcome<DictationAppendResult>>;
+  dictationFinish?: (
+    input: DictationFinishInput,
+  ) => Promise<DesktopDictationOutcome<DictationFinishResult>>;
+  dictationCancel?: (input: DictationCancelInput) => Promise<void>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;

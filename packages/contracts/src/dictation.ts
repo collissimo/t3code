@@ -2,8 +2,9 @@ import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-// Dictation runs on the server: the client streams microphone audio, the server's
-// local speech model (Parakeet through transcribe.cpp) turns it into text.
+// Dictation runs where the speech model is: the client streams microphone audio, a local speech
+// model (Parakeet through transcribe.cpp) turns it into text. The desktop app runs the model in
+// its own dictation worker; other clients use the server they are served from.
 
 /** Audio the client sends: 16 kHz mono 16-bit little-endian PCM. */
 export const DICTATION_SAMPLE_RATE = 16_000;
@@ -68,3 +69,16 @@ export class DictationError extends Schema.TaggedError<DictationError>()("Dictat
     return this.reason;
   }
 }
+
+/**
+ * A dictation step done by the desktop app's own worker. Failures come back as a reason
+ * rather than a rejection, whose message Electron would wrap.
+ */
+export const DesktopDictationOutcome = <Value extends Schema.Top>(value: Value) =>
+  Schema.Union([
+    Schema.Struct({ ok: Schema.Literal(true), value }),
+    Schema.Struct({ ok: Schema.Literal(false), reason: Schema.String }),
+  ]);
+export type DesktopDictationOutcome<Value> =
+  | { readonly ok: true; readonly value: Value }
+  | { readonly ok: false; readonly reason: string };

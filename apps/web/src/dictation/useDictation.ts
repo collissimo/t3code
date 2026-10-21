@@ -1,10 +1,14 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type {
+  DesktopDictationOutcome,
+  DictationAppendInput,
+  DictationFinishResult,
+  EnvironmentId,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
-import { isLocalEnvironmentDisabled } from "~/localEnvironment";
 import { randomUUID } from "~/lib/utils";
 import { serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -15,9 +19,9 @@ import {
 } from "./microphoneCapture";
 import { defaultDictationLanguage } from "./dictationLanguages";
 
-// Dictation into the composer: the microphone is recorded here and streamed to the server,
-// whose local speech model writes the transcript. On request (the structured shortcut, or
-// "Reinschrift" spoken at the end) a small model rewrites it into a structured prompt first.
+// Dictation into the composer: the microphone is recorded here and streamed to a local speech
+// model, which writes the transcript. On request (the structured shortcut, or "Reinschrift"
+// spoken at the end) the thread's server rewrites it into a structured prompt first.
 
 const SEND_INTERVAL_MS = 500;
 const LANGUAGE_KEY = "t3code:dictation-language";
@@ -54,13 +58,23 @@ const failureText = (result: { readonly _tag: "Failure" }) => {
   return error instanceof Error ? error.message : String(error);
 };
 
-// Without its own server the desktop app dictates on the thread's remote environment, whose
-// machine may have no speech model, or should not spend its resources on one.
-const LOCAL_ENVIRONMENT_HINT =
-  " · To dictate on this computer, turn on Settings → Connections → Local environment.";
+const outcomeOf = <Value>(
+  result: { readonly _tag: "Success"; readonly value: Value } | { readonly _tag: "Failure" },
+): DesktopDictationOutcome<Value> =>
+  result._tag === "Success"
+    ? { ok: true, value: result.value }
+    : { ok: false, reason: failureText(result) };
+
+const bridgeFailure = (error: unknown): DesktopDictationOutcome<never> => ({
+  ok: false,
+  reason: error instanceof Error ? error.message : String(error),
+});
 
 export function useDictation(input: {
+  /** The thread's environment; its server rewrites a transcript into a structured prompt. */
   readonly environmentId: EnvironmentId | null;
+  /** The server that transcribes when the desktop app's own worker is not there (web clients). */
+  readonly transcriptionEnvironmentId: EnvironmentId | null;
   /** Puts the text into the composer; false when the composer cannot take it right now. */
   readonly insert: (text: string) => boolean;
 }) {
@@ -93,6 +107,34 @@ export function useDictation(input: {
     languageRef.current = language;
   });
 
+  // The desktop app transcribes on this computer in its own worker, whatever environment the
+  // thread is on; a browser uses the server it is served from.
+  const transcribe = {
+    append: async (appendInput: DictationAppendInput) => {
+      const bridge = window.desktopBridge?.dictationAppend;
+      if (bridge) return bridge(appendInput).catch(bridgeFailure);
+      const environmentId = inputRef.current.transcriptionEnvironmentId;
+      if (environmentId === null) return bridgeFailure("No environment to dictate with.");
+      return outcomeOf(await append({ environmentId, input: appendInput }));
+    },
+    finish: async (sessionId: string): Promise<DesktopDictationOutcome<DictationFinishResult>> => {
+      const bridge = window.desktopBridge?.dictationFinish;
+      if (bridge) return bridge({ sessionId }).catch(bridgeFailure);
+      const environmentId = inputRef.current.transcriptionEnvironmentId;
+      if (environmentId === null) return bridgeFailure("No environment to dictate with.");
+      return outcomeOf(await finish({ environmentId, input: { sessionId } }));
+    },
+    cancel: (sessionId: string) => {
+      const bridge = window.desktopBridge?.dictationCancel;
+      if (bridge) {
+        void bridge({ sessionId }).catch(() => undefined);
+        return;
+      }
+      const environmentId = inputRef.current.transcriptionEnvironmentId;
+      if (environmentId !== null) void cancelSession({ environmentId, input: { sessionId } });
+    },
+  };
+
   const update = (next: Partial<DictationState>) => {
     setState((previous) => ({ ...previous, ...next }));
   };
@@ -116,16 +158,16 @@ export function useDictation(input: {
     return recording;
   };
 
-  const sendPcm = (recording: Recording, environmentId: EnvironmentId, pcm: string) => {
+  const sendPcm = (recording: Recording, pcm: string) => {
     recording.sending = recording.sending.then(async (ok) => {
       if (!ok) return false;
-      const result = await append({
-        environmentId,
-        input: { sessionId: recording.sessionId, language: languageRef.current, pcm },
+      const result = await transcribe.append({
+        sessionId: recording.sessionId,
+        language: languageRef.current,
+        pcm,
       });
-      if (result._tag === "Failure") {
-        recording.failed =
-          failureText(result) + (isLocalEnvironmentDisabled() ? LOCAL_ENVIRONMENT_HINT : "");
+      if (!result.ok) {
+        recording.failed = result.reason;
         return false;
       }
       if (recordingRef.current === recording) update({ preview: result.value.preview });
@@ -161,7 +203,7 @@ export function useDictation(input: {
       sessionId: randomUUID(),
       capture,
       timer: setInterval(() => {
-        void sendPcm(recording, environmentId, capture.takePcm()).then((ok) => {
+        void sendPcm(recording, capture.takePcm()).then((ok) => {
           if (!ok && recordingRef.current === recording) {
             endRecording();
             capture.stop();
@@ -186,17 +228,17 @@ export function useDictation(input: {
     update({ phase: "transcribing", structured });
     const last = recording.capture.takePcm();
     recording.capture.stop();
-    const sent = await sendPcm(recording, environmentId, last);
+    const sent = await sendPcm(recording, last);
     if (!sent) {
       setState(IDLE);
       notify({ text: recording.failed ?? "Dictation failed.", tone: "error" }, 8000);
       return;
     }
-    const result = await finish({ environmentId, input: { sessionId: recording.sessionId } });
+    const result = await transcribe.finish(recording.sessionId);
     if (generation !== generationRef.current) return;
-    if (result._tag === "Failure") {
+    if (!result.ok) {
       setState(IDLE);
-      notify({ text: failureText(result), tone: "error" }, 8000);
+      notify({ text: result.reason, tone: "error" }, 8000);
       return;
     }
     const { text, reason, structureRequested } = result.value;
@@ -263,12 +305,9 @@ export function useDictation(input: {
     if (phase === "recording" || phase === "starting") {
       generationRef.current++;
       const recording = endRecording();
-      const environmentId = inputRef.current.environmentId;
       if (recording !== null) {
         recording.capture.stop();
-        if (environmentId !== null) {
-          void cancelSession({ environmentId, input: { sessionId: recording.sessionId } });
-        }
+        transcribe.cancel(recording.sessionId);
       }
       setState(IDLE);
       notify({ text: "Cancelled", tone: "info" }, 1200);

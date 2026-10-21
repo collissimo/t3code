@@ -5137,9 +5137,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const insertComposerTextAtEndStable = useStableCallback(insertComposerTextAtEnd);
 
   const dictation = useDictation({
-    // The speech model runs where the microphone is: on this machine's own server when there is
-    // one, not on the remote environment the thread may belong to.
-    environmentId: primaryEnvironmentId ?? environmentId,
+    environmentId,
+    // A browser transcribes on the server it is served from, not on the remote environment the
+    // thread may belong to. The desktop app transcribes on this computer either way.
+    transcriptionEnvironmentId: primaryEnvironmentId ?? environmentId,
     insert: (text) =>
       insertComposerTextStable(`${text} `, "cursor", { ensureLeadingBoundary: true }),
   });

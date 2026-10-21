@@ -20,6 +20,9 @@ if (
   if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpCliFastPath(command, process.argv.slice(3));
+  } else if (command === "dictation-worker") {
+    const { runDictationWorker } = await import("./dictation/worker.ts");
+    runDictationWorker();
   } else {
     // Before anything reads stdin: the desktop app's Windows launcher starts
     // the CLI without one. Never for the fast paths, whose stdin is a pipe.

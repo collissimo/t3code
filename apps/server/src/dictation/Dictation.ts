@@ -18,33 +18,13 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { DictationEngine, decodePcm16, type TranscribeModule } from "./DictationEngine.ts";
-import { findModel, modelDirectories } from "./modelFiles.ts";
+import { decodePcm16 } from "./DictationEngine.ts";
+import {
+  finishResult,
+  HOUSEKEEPING_INTERVAL_MS,
+  makeLocalDictationEngine,
+} from "./localDictation.ts";
 import { DEFAULT_STRUCTURE_PROMPT } from "./structurePrompt.ts";
-import { DEFAULT_STRUCTURE_CODEWORDS, removeFillers, splitCodeword } from "./transcriptText.ts";
-
-const IDLE_UNLOAD_MS = 15 * 60_000;
-const NATIVE_LIBRARY_NAME =
-  process.platform === "win32"
-    ? "transcribe.dll"
-    : process.platform === "darwin"
-      ? "libtranscribe.dylib"
-      : "libtranscribe.so";
-
-// transcribe-cpp dlopens a native library; it is only loaded once someone dictates.
-const loadTranscribeCpp = async (path: Path.Path): Promise<TranscribeModule> => {
-  const module = (await import("transcribe-cpp")) as TranscribeModule;
-  if (!process.env.TRANSCRIBE_LIBRARY) {
-    // In the desktop app the package sits in an asar archive, which the OS loader cannot read;
-    // its DLLs are unpacked beside the archive.
-    const directory = module.artifactDir();
-    const unpacked = directory.replace(/\.asar([\\/])/, ".asar.unpacked$1");
-    if (unpacked !== directory) {
-      process.env.TRANSCRIBE_LIBRARY = path.join(unpacked, NATIVE_LIBRARY_NAME);
-    }
-  }
-  return module;
-};
 
 const STRUCTURE_TIMEOUT = "90 seconds";
 const STRUCTURE_MODEL = "haiku";
@@ -90,29 +70,20 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const processRunner = yield* ProcessRunner.ProcessRunner;
-  const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
-  const directories = modelDirectories(process.env, path);
-  const configuredModel = process.env.T3CODE_DICTATION_MODEL?.trim() || undefined;
+  const services = yield* Effect.context<never>();
   const structurePromptFile = path.join(config.baseDir, "dictation", "structure-prompt.md");
   const claudeCwd = path.join(config.stateDir, "dictation", "claude-cwd");
 
   const engine = yield* Effect.acquireRelease(
-    Effect.sync(
-      () =>
-        new DictationEngine({
-          loadModule: () => loadTranscribeCpp(path),
-          resolveModel: (language) =>
-            Effect.runPromiseWith(services)(
-              findModel({ language, configured: configuredModel, directories }),
-            ),
-          idleUnloadMs: IDLE_UNLOAD_MS,
-          log: (message) => Effect.runForkWith(services)(Effect.logInfo(`dictation: ${message}`)),
-        }),
+    Effect.sync(() =>
+      makeLocalDictationEngine((message) =>
+        Effect.runForkWith(services)(Effect.logInfo(`dictation: ${message}`)),
+      ),
     ),
     (engine) => Effect.promise(() => engine.dispose()),
   );
   yield* Effect.sync(() => engine.housekeeping()).pipe(
-    Effect.repeat(Schedule.spaced("30 seconds")),
+    Effect.repeat(Schedule.spaced(`${HOUSEKEEPING_INTERVAL_MS} millis`)),
     Effect.forkScoped,
   );
 
@@ -129,14 +100,7 @@ const make = Effect.gen(function* () {
       try: () => engine.finish(input.sessionId),
       catch: toDictationError,
     });
-    if (result.reason !== undefined) {
-      return { text: "", reason: result.reason, structureRequested: false };
-    }
-    const cleaned = splitCodeword(removeFillers(result.text), DEFAULT_STRUCTURE_CODEWORDS);
-    if (cleaned.text === "") {
-      return { text: "", reason: "no-speech" as const, structureRequested: false };
-    }
-    return { text: cleaned.text, structureRequested: cleaned.found };
+    return finishResult(result);
   });
 
   const cancel = (input: DictationCancelInput) => Effect.sync(() => engine.cancel(input.sessionId));
