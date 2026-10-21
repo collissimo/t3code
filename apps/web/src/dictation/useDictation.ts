@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
-
+import { isLocalEnvironmentDisabled } from "~/localEnvironment";
 import { randomUUID } from "~/lib/utils";
 import { serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -53,6 +53,11 @@ const failureText = (result: { readonly _tag: "Failure" }) => {
   const error = squashAtomCommandFailure(result as never) as unknown;
   return error instanceof Error ? error.message : String(error);
 };
+
+// Without its own server the desktop app dictates on the thread's remote environment, whose
+// machine may have no speech model, or should not spend its resources on one.
+const LOCAL_ENVIRONMENT_HINT =
+  " · To dictate on this computer, turn on Settings → Connections → Local environment.";
 
 export function useDictation(input: {
   readonly environmentId: EnvironmentId | null;
@@ -119,7 +124,8 @@ export function useDictation(input: {
         input: { sessionId: recording.sessionId, language: languageRef.current, pcm },
       });
       if (result._tag === "Failure") {
-        recording.failed = failureText(result);
+        recording.failed =
+          failureText(result) + (isLocalEnvironmentDisabled() ? LOCAL_ENVIRONMENT_HINT : "");
         return false;
       }
       if (recordingRef.current === recording) update({ preview: result.value.preview });
