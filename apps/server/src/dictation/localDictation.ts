@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - The library path is set before any Effect runtime exists in the worker.
 // What the server's Dictation service and the desktop app's dictation worker share: loading
 // transcribe.cpp, the engine with its model lookup, and turning a transcript into a result.
 

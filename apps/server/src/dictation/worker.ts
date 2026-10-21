@@ -1,3 +1,4 @@
+// @effect-diagnostics globalConsole:off globalTimers:off - A plain Node process outside the server runtime; its stderr is the desktop app's log of it.
 // `t3 dictation-worker`: speech to text for the desktop app, without a server. The app starts it
 // with an IPC channel and sends append/finish/cancel requests; the worker touches nothing but
 // the microphone audio it is sent and the speech model files. The channel, not stdout, carries
