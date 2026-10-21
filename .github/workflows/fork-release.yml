@@ -1,4 +1,4 @@
-# Fork releases: Windows x64 and Linux x64 nightlies of upstream main with this fork's features
+# Fork releases: Windows x64 and Linux x64 builds of each upstream nightly with this fork's features
 # merged in.
 #
 # The desktop app looks for updates in the repository it was built in (GITHUB_REPOSITORY ends up
@@ -7,14 +7,17 @@
 # fork does not have; this builds only what this fork's installs need. Both platforms share one
 # release and version, so a fork client and a fork server on the other OS update in step.
 #
-# collin/main is merged with upstream/main for the build only; nothing is pushed to a branch.
-# A merge conflict fails the run (and GitHub mails the owner): then sync collin/main by hand.
+# Each build is collin/main merged with the commit of upstream's newest nightly, so the fork
+# follows upstream release by release. GitHub cannot wake a fork when upstream publishes, so a
+# cheap check runs every ten minutes and builds only when that nightly or collin/main is new.
+# Nothing is pushed to a branch. A merge conflict fails the run (and GitHub mails the owner):
+# then sync collin/main by hand.
 name: Fork release
 
 on:
   schedule:
-    # Every six hours, a minute off the hour; a run without new commits ends after the check.
-    - cron: "17 */6 * * *"
+    # A run without a new upstream nightly or fork commit ends after two API calls.
+    - cron: "*/10 * * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -41,43 +44,33 @@ jobs:
     timeout-minutes: 15
     outputs:
       due: ${{ steps.due.outputs.due }}
-      fork_sha: ${{ steps.merge.outputs.fork_sha }}
-      upstream_sha: ${{ steps.merge.outputs.upstream_sha }}
+      fork_sha: ${{ steps.refs.outputs.fork_sha }}
+      upstream_sha: ${{ steps.refs.outputs.upstream_sha }}
+      upstream_tag: ${{ steps.refs.outputs.upstream_tag }}
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
-      - name: Merge upstream into the fork
-        id: merge
-        env:
-          GIT_TERMINAL_PROMPT: "0"
+      - name: Find the newest upstream nightly and fork commit
+        id: refs
         run: |
           set -euo pipefail
-          git init -q .
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git remote add upstream "$UPSTREAM_URL"
-          git fetch -q --no-tags origin "$FORK_BRANCH"
-          fork_sha=$(git rev-parse FETCH_HEAD)
-          git fetch -q --no-tags upstream main
-          upstream_sha=$(git rev-parse FETCH_HEAD)
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git -c checkout.workers=0 checkout -q --detach "$fork_sha"
-          if ! git merge -q --no-edit -m "Merge upstream main ${upstream_sha:0:12}" "$upstream_sha"; then
-            git diff --name-only --diff-filter=U | sed 's/^/::error::conflict: /'
-            echo "::error::upstream main no longer merges cleanly into $FORK_BRANCH; sync it by hand"
-            exit 1
-          fi
-          echo "fork_sha=$fork_sha" >> "$GITHUB_OUTPUT"
+          upstream_tag=$(gh release list --repo pingdotgg/t3code --limit 30 --exclude-drafts \
+            --json tagName,publishedAt \
+            --jq '[.[] | select(.tagName | test("-nightly\\."))] | sort_by(.publishedAt) | last | .tagName')
+          upstream_sha=$(git ls-remote "$UPSTREAM_URL" "refs/tags/$upstream_tag^{}" "refs/tags/$upstream_tag" | sort -k2 -r | head -n 1 | cut -f1)
+          fork_sha=$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "refs/heads/$FORK_BRANCH" | cut -f1)
+          [[ -n "$upstream_tag" && -n "$upstream_sha" && -n "$fork_sha" ]]
+          echo "Upstream $upstream_tag ($upstream_sha), fork $fork_sha"
+          echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
           echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "fork_sha=$fork_sha" >> "$GITHUB_OUTPUT"
 
       - name: Skip when the last release has the same commits
         id: due
         env:
           FORCE: ${{ inputs.force || false }}
-          FORK_SHA: ${{ steps.merge.outputs.fork_sha }}
-          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+          FORK_SHA: ${{ steps.refs.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
         run: |
           set -euo pipefail
           last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""')
@@ -90,6 +83,30 @@ jobs:
             echo "due=false" >> "$GITHUB_OUTPUT"
           else
             echo "due=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
+      - name: Merge upstream into the fork
+        if: steps.due.outputs.due == 'true'
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          FORK_SHA: ${{ steps.refs.outputs.fork_sha }}
+          UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch -q --no-tags origin "$FORK_SHA"
+          git fetch -q --no-tags upstream "$UPSTREAM_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
+          if ! git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"; then
+            git diff --name-only --diff-filter=U | sed 's/^/::error::conflict: /'
+            echo "::error::upstream no longer merges cleanly into $FORK_BRANCH; sync it by hand"
+            exit 1
           fi
 
       # Upstream's nightly scheme (scripts/resolve-nightly-release.ts: next patch of the desktop
@@ -151,7 +168,7 @@ jobs:
           git fetch -q --no-tags upstream "$UPSTREAM_SHA"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
-          git merge -q --no-edit -m "Merge upstream main ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"
+          git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
@@ -239,11 +256,12 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
           UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+          UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
         run: |
           set -euo pipefail
           ls -la publish
           notes=$(printf '%s\n' \
-            "Windows x64 and Linux x64 builds of upstream main with the fork's features (see FORK.md). Unsigned." \
+            "Windows x64 and Linux x64 builds of upstream $UPSTREAM_TAG with the fork's features (see FORK.md). Unsigned." \
             "" \
             "Fork: $FORK_SHA" \
             "Upstream: $UPSTREAM_SHA")
