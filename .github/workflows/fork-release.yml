@@ -9,7 +9,7 @@
 #
 # Each build is collin/main merged with the commit of upstream's newest nightly, so the fork
 # follows upstream release by release. GitHub cannot wake a fork when upstream publishes, so a
-# cheap check runs every ten minutes and builds only when that nightly or collin/main is new.
+# cheap check runs every hour and builds only when that nightly or collin/main is new.
 # Nothing is pushed to a branch. A merge conflict fails the run (and GitHub mails the owner):
 # then sync collin/main by hand.
 name: Fork release
@@ -17,7 +17,7 @@ name: Fork release
 on:
   schedule:
     # A run without a new upstream nightly or fork commit ends after two API calls.
-    - cron: "*/10 * * * *"
+    - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
       force:

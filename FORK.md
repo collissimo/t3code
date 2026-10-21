@@ -46,7 +46,7 @@ The installed app is a fork build, so the update button stays on the fork. The d
 for updates in the repository it was built in (`app-update.yml`, from `GITHUB_REPOSITORY`); an
 official Nightly would update to upstream and lose the fork features.
 
-`.github/workflows/fork-release.yml` checks every 10 minutes (and on dispatch) for a new upstream
+`.github/workflows/fork-release.yml` checks every hour (and on dispatch) for a new upstream
 nightly or a new `collin/main` commit. It merges the commit of upstream's newest nightly into
 `collin/main` for the build only, skips when the last release already has both commits, builds
 Windows x64 (NSIS, `nightly.yml`) and Linux x64 (AppImage, `nightly-linux.yml`) side by side, and
