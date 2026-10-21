@@ -143,7 +143,10 @@ jobs:
           resolution="$RUNNER_TEMP/resolution"
           mkdir -p "$resolution"
           npm install -g --silent @anthropic-ai/claude-code@2.1.306
-          if bash fork/resolve-conflicts.sh; then
+          # The script of this workflow's commit, which differs from collin/main's on a dispatch from a branch.
+          git fetch -q --no-tags origin "$GITHUB_SHA"
+          git show "$GITHUB_SHA:fork/resolve-conflicts.sh" > "$RUNNER_TEMP/resolve-conflicts.sh"
+          if bash "$RUNNER_TEMP/resolve-conflicts.sh"; then
             git bundle create -q "$resolution/merge.bundle" HEAD "^$FORK_SHA" "^$UPSTREAM_SHA"
           else
             touch "$resolution/failed"
