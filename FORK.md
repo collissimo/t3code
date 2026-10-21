@@ -57,8 +57,8 @@ version. `-f force=true` builds without new commits.
 
 A merge conflict is resolved by Claude Code (`fork/resolve-conflicts.sh`, Opus, at most $5 per
 run) for the build only; the typecheck job still gates the release. It needs the repository secret
-`ANTHROPIC_API_KEY` (API credits) or `CLAUDE_CODE_OAUTH_TOKEN` (subscription, from
-`claude setup-token`). Each fork/upstream pair is resolved once and cached, so hourly retries cost
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`; bills the subscription's monthly Agent SDK
+credit) or `ANTHROPIC_API_KEY` (Console API credits; wins when both are set). Each fork/upstream pair is resolved once and cached, so hourly retries cost
 nothing. When Claude cannot resolve it, every run of that pair fails: sync `collin/main` by hand,
 then `gh workflow run fork-release.yml` (`-f force=true` asks Claude again instead).
 
