@@ -128,7 +128,7 @@ jobs:
             runner: ubuntu-latest
             platform: linux
             target: AppImage
-            assets: release/*.AppImage release/*.blockmap release/nightly-linux.yml
+            assets: release/*.AppImage release/nightly-linux.yml
     defaults:
       run:
         shell: bash
