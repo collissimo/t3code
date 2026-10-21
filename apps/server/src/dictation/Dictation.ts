@@ -83,7 +83,7 @@ const make = Effect.gen(function* () {
     (engine) => Effect.promise(() => engine.dispose()),
   );
   yield* Effect.sync(() => engine.housekeeping()).pipe(
-    Effect.repeat(Schedule.spaced(`${HOUSEKEEPING_INTERVAL_MS} millis`)),
+    Effect.repeat(Schedule.spaced(HOUSEKEEPING_INTERVAL_MS)),
     Effect.forkScoped,
   );
 

@@ -72,7 +72,8 @@ export function runDictationWorker(): void {
   }
   const engine = makeLocalDictationEngine((message) => console.error(`dictation: ${message}`));
   const housekeeping = setInterval(() => engine.housekeeping(), HOUSEKEEPING_INTERVAL_MS);
-  process.on("message", (request: DictationWorkerRequest) => {
+  process.on("message", (message: unknown) => {
+    const request = message as DictationWorkerRequest;
     void handleDictationWorkerRequest(engine, request).then((response) => send(response));
   });
   // The app quit or let go of the worker.

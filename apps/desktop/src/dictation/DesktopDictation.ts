@@ -65,10 +65,11 @@ const make = Effect.gen(function* () {
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString()).slice(-2000);
     });
-    child.on("message", (response: WorkerResponse) => {
-      const resolve = pending.get(response.id);
-      pending.delete(response.id);
-      resolve?.(response);
+    child.on("message", (message: unknown) => {
+      const { id, ...outcome } = message as WorkerResponse;
+      const resolve = pending.get(id);
+      pending.delete(id);
+      resolve?.(outcome as DesktopDictationOutcome<unknown>);
     });
     child.on("exit", (code, signal) => {
       if (worker === child) worker = undefined;
