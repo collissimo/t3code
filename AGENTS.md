@@ -199,3 +199,7 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 
 - Don't verify with browsers or computer use unless the user explicitly agrees or requests it.
 - Security is important, but should not be over-indexed on, especially for dev mode/maintainer-only features.
+
+## Scars
+
+- Fork CI step without `timeout-minutes` (VS installer for Spectre libs) stalled unnoticed until the user flagged it; the watcher only reported finished steps. Rule: every install/download step in a workflow gets `timeout-minutes`, and a run watcher reports the running step and its age.
