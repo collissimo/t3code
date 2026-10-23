@@ -229,6 +229,44 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "Version $version"
 
+  # The watcher fails silently on Cloudflare (CPU limit, revoked token, outage). A scheduled run
+  # that finds an upstream nightly over an hour old that the watcher never dispatched fails here,
+  # and GitHub mails the owner; the build above still runs.
+  watchdog:
+    needs: prepare
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check that the watcher dispatched the newest upstream nightly
+        env:
+          UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          published=$(gh release view "$UPSTREAM_TAG" --repo pingdotgg/t3code --json publishedAt --jq .publishedAt)
+          if (( $(date -u +%s) - $(date -u -d "$published" +%s) < 3600 )); then
+            echo "$UPSTREAM_TAG is less than an hour old."
+            exit 0
+          fi
+          last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""')
+          body=""
+          if [[ -n "$last" ]]; then
+            body=$(gh release view "$last" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          fi
+          if [[ "$body" == *"upstream $UPSTREAM_TAG "* ]]; then
+            echo "$UPSTREAM_TAG is already released."
+            exit 0
+          fi
+          dispatched=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow fork-release.yml \
+            --event repository_dispatch --limit 20 --json displayTitle \
+            --jq "[.[] | select(.displayTitle == \"Fork release of $UPSTREAM_TAG\")] | length")
+          if (( dispatched > 0 )); then
+            echo "The watcher dispatched $UPSTREAM_TAG."
+            exit 0
+          fi
+          echo "::error::The Cloudflare watcher missed upstream $UPSTREAM_TAG (published $published). Check it with: npx wrangler tail (in fork/upstream-nightly-watcher)"
+          exit 1
+
   # vp pack does not typecheck, so a type error would otherwise ship. Only the apps the desktop
   # build bundles; publish waits for this.
   typecheck:
