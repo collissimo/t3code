@@ -64,8 +64,8 @@ async function check(env) {
   if (!nightly) return "no upstream nightly";
   const tag = nightly.tagName;
 
-  // fork-release.yml writes "builds of upstream <tag> with" into each release.
-  if (latest?.description?.includes(`upstream ${tag} `)) return `${tag} already released`;
+  // fork/release-notes.sh ends each release with a hidden "upstream-tag=<tag> " marker.
+  if (latest?.description?.includes(`upstream-tag=${tag} `)) return `${tag} already released`;
 
   // A failed build must not be redispatched every minute; the workflow's cron retries it.
   const workflow = `repos/${env.FORK}/actions/workflows/fork-release.yml`;
