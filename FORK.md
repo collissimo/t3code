@@ -51,6 +51,8 @@ official Nightly would update to upstream and lose the fork features.
 upstream releases and its cron fires hours late in a fork, so the Cloudflare Worker in
 `fork/upstream-nightly-watcher/` checks every minute and sends one `repository_dispatch` per new
 upstream nightly (a failed build is retried by the 6-hour cron, not redispatched).
+A Worker failure is silent on Cloudflare, so the 6-hour run's `watchdog` job fails (and GitHub
+mails the owner) when an upstream nightly over an hour old was never dispatched.
 
 Each run merges the commit of upstream's newest nightly into `collin/main` for the build only, skips when the last release already has both commits, builds
 Windows x64 (NSIS, `nightly.yml`) and Linux x64 (AppImage, `nightly-linux.yml`) side by side, and
