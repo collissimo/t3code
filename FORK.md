@@ -84,7 +84,7 @@ check.
   `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. Upstream's telemetry tokens are deliberately not copied.
 - The tag sits on the `collin/main` commit. The release notes (`fork/release-notes.sh`) are
   upstream's notes for every nightly since the previous fork build, then the fork's pull
-  requests since then; the update popup shows them. A hidden comment at the end records the fork
+  requests and direct commits since the commit that build built; the update popup shows them. A hidden comment at the end records the fork
   and upstream commits, which the skip check, the watcher and the watchdog read.
 
 ## Keeping changes mergeable
