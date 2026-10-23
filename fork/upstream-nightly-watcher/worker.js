@@ -8,7 +8,7 @@ async function github(env, path, init = {}) {
     ...init,
     headers: {
       accept: "application/vnd.github+json",
-      // A pasted secret can keep a trailing CR, which GitHub rejects with an empty 400.
+      // Piping the secret in can leave a trailing newline.
       authorization: `Bearer ${env.GITHUB_TOKEN.trim()}`,
       "user-agent": "t3code-upstream-nightly-watcher",
       "x-github-api-version": "2022-11-28",
@@ -21,18 +21,51 @@ async function github(env, path, init = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+// GraphQL, not REST: the REST release list carries every asset and took ~8 ms of CPU to parse,
+// against the free plan's 10 ms per cron run.
+const RELEASES = `query (
+  $upstreamOwner: String!
+  $upstreamName: String!
+  $forkOwner: String!
+  $forkName: String!
+) {
+  upstream: repository(owner: $upstreamOwner, name: $upstreamName) {
+    releases(first: 30, orderBy: { field: CREATED_AT, direction: DESC }) {
+      nodes { tagName isDraft publishedAt }
+    }
+  }
+  fork: repository(owner: $forkOwner, name: $forkName) {
+    releases(first: 1, orderBy: { field: CREATED_AT, direction: DESC }) {
+      nodes { description }
+    }
+  }
+}`;
+
+async function releases(env) {
+  const [upstreamOwner, upstreamName] = env.UPSTREAM.split("/");
+  const [forkOwner, forkName] = env.FORK.split("/");
+  const { data, errors } = await github(env, "graphql", {
+    method: "POST",
+    body: JSON.stringify({
+      query: RELEASES,
+      variables: { upstreamOwner, upstreamName, forkOwner, forkName },
+    }),
+  });
+  if (errors) throw new Error(`graphql: ${JSON.stringify(errors)}`);
+  return { upstream: data.upstream.releases.nodes, latest: data.fork.releases.nodes[0] };
+}
+
 async function check(env) {
+  const { upstream, latest } = await releases(env);
   // Same choice as fork-release.yml: the newest published nightly.
-  const upstream = await github(env, `repos/${env.UPSTREAM}/releases?per_page=30`);
   const nightly = upstream
-    .filter((release) => !release.draft && release.tag_name.includes("-nightly."))
-    .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0];
+    .filter((release) => !release.isDraft && release.tagName.includes("-nightly."))
+    .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))[0];
   if (!nightly) return "no upstream nightly";
-  const tag = nightly.tag_name;
+  const tag = nightly.tagName;
 
   // fork-release.yml writes "builds of upstream <tag> with" into each release.
-  const [latest] = await github(env, `repos/${env.FORK}/releases?per_page=1`);
-  if (latest?.body?.includes(`upstream ${tag} `)) return `${tag} already released`;
+  if (latest?.description?.includes(`upstream ${tag} `)) return `${tag} already released`;
 
   // A failed build must not be redispatched every minute; the workflow's cron retries it.
   const workflow = `repos/${env.FORK}/actions/workflows/fork-release.yml`;
