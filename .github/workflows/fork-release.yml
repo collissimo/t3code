@@ -462,10 +462,10 @@ jobs:
           # Missing notes must not hold back a build; the marker alone still records it.
           marker="<!-- fork-release fork=$FORK_SHA upstream=$UPSTREAM_SHA upstream-tag=$UPSTREAM_TAG -->"
           previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""')
-          gh api "repos/$GITHUB_REPOSITORY/contents/fork/release-notes.sh?ref=$GITHUB_SHA" \
-            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/release-notes.sh"
-          if ! notes=$(REPO="$GITHUB_REPOSITORY" TARGET="$FORK_SHA" PREVIOUS_TAG="$previous" \
-            bash "$RUNNER_TEMP/release-notes.sh"); then
+          if ! { gh api "repos/$GITHUB_REPOSITORY/contents/fork/release-notes.sh?ref=$GITHUB_SHA" \
+              -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/release-notes.sh" &&
+            notes=$(REPO="$GITHUB_REPOSITORY" TARGET="$FORK_SHA" PREVIOUS_TAG="$previous" \
+              bash "$RUNNER_TEMP/release-notes.sh"); }; then
             echo "::warning::release notes failed; publishing without them"
             notes="$marker"
           fi
