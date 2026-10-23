@@ -1,0 +1,11 @@
+name = "t3code-upstream-nightly-watcher"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+UPSTREAM = "pingdotgg/t3code"
+FORK = "collissimo/t3code"
