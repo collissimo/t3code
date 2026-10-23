@@ -8,18 +8,28 @@
 # release and version, so a fork client and a fork server on the other OS update in step.
 #
 # Each build is collin/main merged with the commit of upstream's newest nightly, so the fork
-# follows upstream release by release. GitHub cannot wake a fork when upstream publishes, so a
-# cheap check runs every hour and builds only when that nightly or collin/main is new.
+# follows upstream release by release. GitHub cannot wake a fork when upstream publishes (and npm
+# registry hooks are gone), and scheduled runs in a fork fire hours late or not at all. So
+# fork/upstream-nightly-watcher, a Cloudflare Worker, checks every minute and sends
+# repository_dispatch once per new upstream nightly; the cron is only a fallback. Every trigger
+# builds only when that nightly or collin/main is new.
 # Nothing is pushed to a branch. Claude Code resolves a merge conflict for the build only
 # (fork/resolve-conflicts.sh, with the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret);
 # collin/main itself is still synced by fork/sync.sh. When Claude cannot resolve it, the run fails
 # (and GitHub mails the owner): then sync collin/main by hand.
 name: Fork release
+# The watcher reads this title to dispatch each upstream nightly only once.
+run-name: ${{ github.event.client_payload.upstream_tag && format('Fork release of {0}', github.event.client_payload.upstream_tag) || 'Fork release' }}
 
 on:
+  repository_dispatch:
+    types: [upstream-nightly]
+  push:
+    branches: [collin/main]
   schedule:
-    # A run without a new upstream nightly or fork commit ends after two API calls.
-    - cron: "23 * * * *"
+    # Fallback for a missed or failed dispatch. A run without a new upstream nightly or fork
+    # commit ends after two API calls.
+    - cron: "23 */6 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -113,7 +123,7 @@ jobs:
             echo "conflict=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # One resolution per fork/upstream pair: a failed build leaves the pair due again every hour,
+      # One resolution per fork/upstream pair: a failed build leaves the pair due again on every run,
       # and a retry must neither pay for nor re-roll the resolution. force asks Claude again.
       - name: Restore an earlier resolution of these commits
         id: earlier

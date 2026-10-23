@@ -46,9 +46,13 @@ The installed app is a fork build, so the update button stays on the fork. The d
 for updates in the repository it was built in (`app-update.yml`, from `GITHUB_REPOSITORY`); an
 official Nightly would update to upstream and lose the fork features.
 
-`.github/workflows/fork-release.yml` checks every hour (and on dispatch) for a new upstream
-nightly or a new `collin/main` commit. It merges the commit of upstream's newest nightly into
-`collin/main` for the build only, skips when the last release already has both commits, builds
+`.github/workflows/fork-release.yml` runs when upstream publishes a nightly, on every push to
+`collin/main`, every 6 hours as a fallback, and on dispatch. GitHub cannot notify a fork of
+upstream releases and its cron fires hours late in a fork, so the Cloudflare Worker in
+`fork/upstream-nightly-watcher/` checks every minute and sends one `repository_dispatch` per new
+upstream nightly (a failed build is retried by the 6-hour cron, not redispatched).
+
+Each run merges the commit of upstream's newest nightly into `collin/main` for the build only, skips when the last release already has both commits, builds
 Windows x64 (NSIS, `nightly.yml`) and Linux x64 (AppImage, `nightly-linux.yml`) side by side, and
 publishes both in one prerelease `v<x.y.z>-nightly.<date>.<10000 + run>`. The version scheme is
 upstream's (the offset sorts a fork build above an upstream nightly of the same day), so the app's
@@ -58,9 +62,14 @@ version. `-f force=true` builds without new commits.
 A merge conflict is resolved by Claude Code (`fork/resolve-conflicts.sh`, Opus, at most $5 per
 run) for the build only; the typecheck job still gates the release. It needs the repository secret
 `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`; bills the subscription's monthly Agent SDK
-credit) or `ANTHROPIC_API_KEY` (Console API credits; wins when both are set). Each fork/upstream pair is resolved once and cached, so hourly retries cost
+credit) or `ANTHROPIC_API_KEY` (Console API credits; wins when both are set). Each fork/upstream pair is resolved once and cached, so retries cost
 nothing. When Claude cannot resolve it, every run of that pair fails: sync `collin/main` by hand,
 then `gh workflow run fork-release.yml` (`-f force=true` asks Claude again instead).
+
+Watcher setup (once, or after the token expires), from `fork/upstream-nightly-watcher/`:
+`npx wrangler deploy`, then `npx wrangler secret put GITHUB_TOKEN` with a fine-grained token
+for `collissimo/t3code` (Contents: read and write, Actions: read). `npx wrangler tail` shows
+each check.
 
 - Every machine must run a fork build once (installed by hand); from then on the update button,
   including "update everything" for connected servers, stays on the fork. A desktop app on the
