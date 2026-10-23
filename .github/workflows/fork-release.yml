@@ -90,7 +90,7 @@ jobs:
           if [[ -n "$last" ]]; then
             body=$(gh release view "$last" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
           fi
-          if [[ "$FORCE" != "true" && "$body" == *"Fork: $FORK_SHA"* && "$body" == *"Upstream: $UPSTREAM_SHA"* ]]; then
+          if [[ "$FORCE" != "true" && "$body" == *"fork=$FORK_SHA upstream=$UPSTREAM_SHA "* ]]; then
             echo "$last already has fork $FORK_SHA and upstream $UPSTREAM_SHA."
             echo "due=false" >> "$GITHUB_OUTPUT"
           else
@@ -253,7 +253,7 @@ jobs:
           if [[ -n "$last" ]]; then
             body=$(gh release view "$last" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
           fi
-          if [[ "$body" == *"upstream $UPSTREAM_TAG "* ]]; then
+          if [[ "$body" == *"upstream-tag=$UPSTREAM_TAG "* ]]; then
             echo "$UPSTREAM_TAG is already released."
             exit 0
           fi
@@ -459,11 +459,16 @@ jobs:
         run: |
           set -euo pipefail
           ls -la publish
-          notes=$(printf '%s\n' \
-            "Windows x64 and Linux x64 builds of upstream $UPSTREAM_TAG with the fork's features (see FORK.md). Unsigned." \
-            "" \
-            "Fork: $FORK_SHA" \
-            "Upstream: $UPSTREAM_SHA")
+          # Missing notes must not hold back a build; the marker alone still records it.
+          marker="<!-- fork-release fork=$FORK_SHA upstream=$UPSTREAM_SHA upstream-tag=$UPSTREAM_TAG -->"
+          previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""')
+          gh api "repos/$GITHUB_REPOSITORY/contents/fork/release-notes.sh?ref=$GITHUB_SHA" \
+            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/release-notes.sh"
+          if ! notes=$(REPO="$GITHUB_REPOSITORY" TARGET="$FORK_SHA" PREVIOUS_TAG="$previous" \
+            bash "$RUNNER_TEMP/release-notes.sh"); then
+            echo "::warning::release notes failed; publishing without them"
+            notes="$marker"
+          fi
           gh release create "$TAG" publish/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$FORK_BRANCH" \
