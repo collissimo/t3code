@@ -8,7 +8,8 @@ async function github(env, path, init = {}) {
     ...init,
     headers: {
       accept: "application/vnd.github+json",
-      authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      // A pasted secret can keep a trailing CR, which GitHub rejects with an empty 400.
+      authorization: `Bearer ${env.GITHUB_TOKEN.trim()}`,
       "user-agent": "t3code-upstream-nightly-watcher",
       "x-github-api-version": "2022-11-28",
       ...init.headers,
