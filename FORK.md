@@ -68,8 +68,8 @@ then `gh workflow run fork-release.yml` (`-f force=true` asks Claude again inste
 
 Watcher setup (once, or after the token expires), from `fork/upstream-nightly-watcher/`:
 `npx wrangler deploy`, then copy a fine-grained token for `collissimo/t3code` (Contents: read and
-write, Actions: read) and run `Get-Clipboard | npx wrangler secret put GITHUB_TOKEN`. Pasting
-into the hidden prompt instead can store a raw Ctrl+V. `npx wrangler tail` shows each check.
+write, Actions: read) and run `Get-Clipboard | npx wrangler secret put GITHUB_TOKEN`. `npx wrangler tail` shows each
+check.
 
 - Every machine must run a fork build once (installed by hand); from then on the update button,
   including "update everything" for connected servers, stays on the fork. A desktop app on the
