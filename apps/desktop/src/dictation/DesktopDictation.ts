@@ -108,11 +108,16 @@ const make = Effect.gen(function* () {
   );
 
   return DesktopDictation.of({
-    append: (input) => request<DictationAppendResult>({ method: "append", ...input }),
-    finish: (input) => request<DictationFinishResult>({ method: "finish", ...input }),
-    cancel: (input) =>
+    append: Effect.fn("DesktopDictation.append")((input: DictationAppendInput) =>
+      request<DictationAppendResult>({ method: "append", ...input }),
+    ),
+    finish: Effect.fn("DesktopDictation.finish")((input: DictationFinishInput) =>
+      request<DictationFinishResult>({ method: "finish", ...input }),
+    ),
+    cancel: Effect.fn("DesktopDictation.cancel")((input: DictationCancelInput) =>
       // Nothing to cancel when no recording ever started the worker.
       worker === undefined ? Effect.void : Effect.asVoid(request({ method: "cancel", ...input })),
+    ),
   });
 });
 
