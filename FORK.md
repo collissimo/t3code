@@ -111,7 +111,7 @@ can be rebound in Settings → Keybindings ("Composer: Dictate").
   agents, files or terminals). A browser transcribes on the server it is served from. Both use
   [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (`transcribe-cpp` npm
   package). Nothing is downloaded; the best `.gguf` found is used, from
-  `<T3 home>/dictation/models`, Scrawl (`%LOCALAPPDATA%\Scrawl\models`) or Hex
+  `~/.t3/dictation/models` (`$T3CODE_HOME/dictation/models`; not `--home-dir`), Scrawl (`%LOCALAPPDATA%\Scrawl\models`) or Hex
   (`%APPDATA%\voice-control\models`). Best first: Cohere Transcribe 03-2026, Canary 1B v2,
   Parakeet TDT 0.6b v3 (on German speech they miss about 4%, 7% and 14% of the words).
   `T3CODE_DICTATION_MODEL=<path to .gguf>` picks one. Without Scrawl or Hex,

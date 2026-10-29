@@ -5,7 +5,7 @@ import * as Path from "effect/Path";
 
 // The speech model is never downloaded here. Hex (the Windows build of voice-control) and
 // Scrawl install Parakeet as a .gguf file; dictation picks it up from their folders. Any other
-// model transcribe.cpp runs goes into <T3 home>/dictation/models.
+// model transcribe.cpp runs goes into ~/.t3/dictation/models ($T3CODE_HOME/dictation/models).
 export function modelDirectories(env: NodeJS.ProcessEnv, path: Path.Path): ReadonlyArray<string> {
   const dirs: Array<string> = [];
   const home = env.USERPROFILE || env.HOME;
