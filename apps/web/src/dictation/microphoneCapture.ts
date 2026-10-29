@@ -87,7 +87,7 @@ export async function startMicrophoneCapture(): Promise<MicrophoneCapture> {
   };
 }
 
-export function encodePcm16(blocks: ReadonlyArray<Float32Array>): string {
+function encodePcm16(blocks: ReadonlyArray<Float32Array>): string {
   let length = 0;
   for (const block of blocks) length += block.length;
   const bytes = new Uint8Array(length * 2);

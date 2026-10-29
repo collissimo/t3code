@@ -6,8 +6,7 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 // model (Parakeet through transcribe.cpp) turns it into text. The desktop app runs the model in
 // its own dictation worker; other clients use the server they are served from.
 
-/** Audio the client sends: 16 kHz mono 16-bit little-endian PCM. */
-export const DICTATION_SAMPLE_RATE = 16_000;
+// Audio the client sends: 16 kHz mono 16-bit little-endian PCM.
 // About one second of base64 PCM per chunk is ~43 KB; a client sends one every half second.
 const DICTATION_MAX_CHUNK_CHARS = 2_000_000;
 
