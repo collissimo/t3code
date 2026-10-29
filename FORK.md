@@ -109,14 +109,19 @@ can be rebound in Settings → Keybindings ("Composer: Dictate").
   and with the local environment turned off: it starts `t3 dictation-worker` from the server
   package it ships, a process that only receives the audio and reads the model (no server,
   agents, files or terminals). A browser transcribes on the server it is served from. Both use
-  Parakeet TDT 0.6b v3 through
   [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (`transcribe-cpp` npm
-  package). Nothing is downloaded; the `.gguf` model Scrawl
-  (`%LOCALAPPDATA%\Scrawl\models`) or Hex (`%APPDATA%\voice-control\models`) installed is used.
-  `T3CODE_DICTATION_MODEL=<path to .gguf>` picks another one.
-  Without Scrawl or Hex, `fork/install-parakeet.ps1` downloads the model into Scrawl's folder.
-- The model (~1.1 GB) loads on the first chunk of a recording and is let go after 15 minutes
-  without one.
+  package). Nothing is downloaded; the best `.gguf` found is used, from
+  `<T3 home>/dictation/models`, Scrawl (`%LOCALAPPDATA%\Scrawl\models`) or Hex
+  (`%APPDATA%\voice-control\models`). Best first: Cohere Transcribe 03-2026, Canary 1B v2,
+  Parakeet TDT 0.6b v3 (on German speech they miss about 4%, 7% and 14% of the words).
+  `T3CODE_DICTATION_MODEL=<path to .gguf>` picks one. Without Scrawl or Hex,
+  `fork/install-parakeet.ps1` downloads Parakeet into Scrawl's folder; the others come from
+  [huggingface.co/handy-computer](https://huggingface.co/handy-computer) (the `Q8_0` file).
+- It runs on the GPU when there is one (Vulkan; the log says `loaded … on Vulkan0`), about five
+  times faster than the CPU. `T3CODE_DICTATION_BACKEND=cpu` keeps it on the CPU.
+- Long recordings are transcribed in pieces of at most 25 seconds, cut at pauses.
+- The model (1 to 2.5 GB) loads on the first chunk of a recording and is let go after 15
+  minutes without one.
 - Structuring calls `claude --print --model haiku` on the thread's server; it needs a logged-in
   Claude Code. The instructions are built in; a file at `<T3 home>/dictation/structure-prompt.md`
   replaces them and is read on every rewrite.

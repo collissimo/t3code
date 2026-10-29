@@ -4,55 +4,70 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 // The speech model is never downloaded here. Hex (the Windows build of voice-control) and
-// Scrawl install Parakeet as a .gguf file; dictation picks it up from their folders.
+// Scrawl install Parakeet as a .gguf file; dictation picks it up from their folders. Any other
+// model transcribe.cpp runs goes into <T3 home>/dictation/models.
 export function modelDirectories(env: NodeJS.ProcessEnv, path: Path.Path): ReadonlyArray<string> {
   const dirs: Array<string> = [];
+  const home = env.USERPROFILE || env.HOME;
+  const t3Home = env.T3CODE_HOME?.trim() || (home ? path.join(home, ".t3") : undefined);
+  if (t3Home) dirs.push(path.join(t3Home, "dictation", "models"));
   if (env.APPDATA) dirs.push(path.join(env.APPDATA, "voice-control", "models"));
   if (env.LOCALAPPDATA) dirs.push(path.join(env.LOCALAPPDATA, "Scrawl", "models"));
   return dirs;
 }
 
-const nameParts = (name: string) => name.toLowerCase().replace(/[_.]/g, "-").split("-");
-const isEnglishOnly = (name: string) => {
-  const parts = nameParts(name);
-  return parts.includes("en") || parts.includes("v2");
-};
-const isMultilingual = (name: string) => {
-  const lowered = name.toLowerCase();
-  return !isEnglishOnly(name) && (lowered.includes("v3") || lowered.includes("whisper"));
-};
+const EUROPEAN = "bg hr cs da nl en et fi fr de el hu it lv lt mt pl pt ro sk sl es sv ru uk";
 
 /**
- * The models that can transcribe `language`, best first. English prefers Parakeet Unified
- * English, then any Parakeet. Every other language needs a model whose name says it is
- * multilingual (Parakeet v3 covers 25 European languages, or Whisper); Parakeet Unified English
- * and Parakeet v2 never get German speech. Without a language, multilingual models come first.
+ * Models known by file name, best first, with the languages they transcribe. On German speech
+ * (Multilingual LibriSpeech) Cohere Transcribe misses 4% of the words, Canary 1B v2 7%, Parakeet
+ * v3 14%. Cohere and Canary cannot detect the language; the client always sends one.
+ */
+const KNOWN_MODELS: ReadonlyArray<{
+  readonly matches: (name: string) => boolean;
+  readonly languages: ReadonlyArray<string> | "any";
+}> = [
+  {
+    matches: (name) => name.startsWith("cohere-transcribe") && !name.includes("arabic"),
+    languages: "en fr de es it pt nl pl el ar ja zh vi ko".split(" "),
+  },
+  { matches: (name) => name.startsWith("canary-1b-v2"), languages: EUROPEAN.split(" ") },
+  { matches: (name) => name.startsWith("parakeet-unified-en"), languages: ["en"] },
+  {
+    matches: (name) => name.startsWith("parakeet") && name.includes("v3"),
+    languages: EUROPEAN.split(" "),
+  },
+  { matches: (name) => name.startsWith("parakeet"), languages: ["en"] },
+  { matches: (name) => name.includes("whisper") && /[.-]en[.-]/.test(name), languages: ["en"] },
+  { matches: (name) => name.includes("whisper"), languages: "any" },
+];
+
+/**
+ * The models that can transcribe `language`, best first. A model not in KNOWN_MODELS only gets
+ * English. Without a language, models that detect it (Parakeet v3, Whisper) come first.
  */
 export function rankModels(
   paths: ReadonlyArray<string>,
   language: string | undefined,
   basename: (path: string) => string,
 ): ReadonlyArray<string> {
-  const english = language?.toLowerCase().startsWith("en") ?? false;
-  const rank = (path: string): ReadonlyArray<boolean | string> => {
+  const code = language?.toLowerCase().split(/[-_]/)[0] || undefined;
+  const rank = (path: string): number | undefined => {
     const name = basename(path).toLowerCase();
-    return [
-      !name.startsWith("parakeet"),
-      !(english && name.includes("unified-en")),
-      !(!english && name.includes("v3")),
-      name,
-    ];
-  };
-  const compare = (left: string, right: string) => {
-    const a = rank(left);
-    const b = rank(right);
-    for (let index = 0; index < a.length; index++) {
-      if (a[index]! < b[index]!) return -1;
-      if (a[index]! > b[index]!) return 1;
+    const known = KNOWN_MODELS.findIndex((model) => model.matches(name));
+    if (known === -1) return code === undefined || code === "en" ? KNOWN_MODELS.length : undefined;
+    const { languages } = KNOWN_MODELS[known]!;
+    if (code === undefined) {
+      const detects = languages === "any" || name.includes("v3");
+      return detects ? known : known + KNOWN_MODELS.length;
     }
-    return 0;
+    return languages === "any" || languages.includes(code) ? known : undefined;
   };
-  return paths.filter((path) => english || isMultilingual(basename(path))).toSorted(compare);
+  return paths
+    .map((path) => ({ path, rank: rank(path) }))
+    .filter((entry): entry is { path: string; rank: number } => entry.rank !== undefined)
+    .toSorted((left, right) => left.rank - right.rank || left.path.localeCompare(right.path))
+    .map((entry) => entry.path);
 }
 
 /** The model file to load: `configured` when set, else the best one Hex or Scrawl installed. */
@@ -83,8 +98,9 @@ export const findModel = Effect.fn("dictation.findModel")(function* (input: {
   if (best === undefined) {
     return yield* new DictationError({
       reason:
-        `No Parakeet model${input.language ? ` for "${input.language}"` : ""} found. ` +
-        `Install Parakeet v3 with Scrawl or Hex, or set T3CODE_DICTATION_MODEL. Searched: ` +
+        `No speech model${input.language ? ` for "${input.language}"` : ""} found. ` +
+        `Install Parakeet v3 with Scrawl or Hex, put a transcribe.cpp .gguf into the first ` +
+        `folder below, or set T3CODE_DICTATION_MODEL. Searched: ` +
         (input.directories.join(", ") || "nothing"),
     });
   }

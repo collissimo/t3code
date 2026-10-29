@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-// Languages Parakeet v3 transcribes, each with the flag of its country. Drawn as SVG because
+// Languages the dictation models transcribe, each with the flag of its country. Drawn as SVG because
 // Windows renders flag emoji as two letters.
 const stripes = (direction: "row" | "column", colors: ReadonlyArray<string>) =>
   colors.map((color, index) => {
