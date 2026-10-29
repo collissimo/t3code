@@ -9,8 +9,10 @@ import {
   SAMPLE_RATE,
   decodePcm16,
   normalizeLanguage,
+  splitAtPauses,
   type TranscribeModule,
 } from "./DictationEngine.ts";
+import { dictationBackend } from "./localDictation.ts";
 import { findModel, rankModels } from "./modelFiles.ts";
 import { handleDictationWorkerRequest } from "./worker.ts";
 
@@ -18,6 +20,9 @@ const V3 = "C:/models/parakeet-tdt-0.6b-v3-Q8_0.gguf";
 const UNIFIED_EN = "C:/models/parakeet-unified-en-0.6b-Q8_0.gguf";
 const V2 = "C:/models/parakeet-tdt-0.6b-v2-Q8_0.gguf";
 const WHISPER = "C:/models/whisper-large-v3-turbo-Q8_0.gguf";
+const WHISPER_EN = "C:/models/whisper-small.en-Q8_0.gguf";
+const COHERE = "C:/models/cohere-transcribe-03-2026-Q8_0.gguf";
+const CANARY = "C:/models/canary-1b-v2-Q8_0.gguf";
 const basename = (path: string) => path.split("/").at(-1)!;
 
 describe("rankModels", () => {
@@ -32,7 +37,16 @@ describe("rankModels", () => {
     ]);
   });
   it("never gives German an English-only model", () => {
-    expect(rankModels([UNIFIED_EN, V2], "de", basename)).toEqual([]);
+    expect(rankModels([UNIFIED_EN, V2, WHISPER_EN], "de", basename)).toEqual([]);
+  });
+  it("prefers Cohere, then Canary, for the languages they know", () => {
+    const all = [V3, UNIFIED_EN, CANARY, COHERE];
+    expect(rankModels(all, "de", basename)).toEqual([COHERE, CANARY, V3]);
+    expect(rankModels(all, "en", basename)).toEqual([COHERE, CANARY, UNIFIED_EN, V3]);
+    expect(rankModels(all, "sv", basename)).toEqual([CANARY, V3]);
+  });
+  it("puts models that detect the language first when none is given", () => {
+    expect(rankModels([COHERE, V3], undefined, basename)).toEqual([V3, COHERE]);
   });
 });
 
@@ -79,6 +93,23 @@ describe("audio input", () => {
     pcm.writeInt16LE(16384, 0);
     pcm.writeInt16LE(-32768, 2);
     expect([...decodePcm16(pcm.toString("base64"))]).toEqual([0.5, -1]);
+  });
+  it("cuts long audio at the quietest moment, never longer than 25 seconds", () => {
+    const audio = speech(70);
+    audio.fill(0, 18 * SAMPLE_RATE, 18.5 * SAMPLE_RATE);
+    const pieces = splitAtPauses(audio);
+    const cut = pieces[0]!.length / SAMPLE_RATE;
+    expect(cut).toBeGreaterThan(18);
+    expect(cut).toBeLessThan(18.5);
+    expect(pieces.every((piece) => piece.length <= 25 * SAMPLE_RATE)).toBe(true);
+    expect(pieces.reduce((sum, piece) => sum + piece.length, 0)).toBe(audio.length);
+    expect(splitAtPauses(speech(25))).toHaveLength(1);
+  });
+  it("reads the backend from the environment, auto when unset or unknown", () => {
+    expect(dictationBackend(" CPU ")).toBe("cpu");
+    expect(dictationBackend("vulkan")).toBe("vulkan");
+    expect(dictationBackend("gpu")).toBe("auto");
+    expect(dictationBackend(undefined)).toBe("auto");
   });
   it("normalizes language tags", () => {
     expect(normalizeLanguage("de-DE")).toBe("de");
@@ -140,6 +171,12 @@ describe("DictationEngine", () => {
     engine.append("a", "de-DE", speech(2));
     expect(await engine.finish("a")).toEqual({ text: "Hallo Welt" });
     expect(FakeModel.loads).toEqual(["model.gguf"]);
+  });
+
+  it("transcribes a long recording in pieces and joins them", async () => {
+    const { engine } = makeEngine();
+    engine.append("long", "de", speech(40));
+    expect(await engine.finish("long")).toEqual({ text: "Hallo Welt Hallo Welt" });
   });
 
   it("reports silence and too short recordings without asking the model", async () => {

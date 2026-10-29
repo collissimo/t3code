@@ -2,8 +2,8 @@
 //
 // A client streams microphone audio into a recording session. The model loads on the first
 // chunk, while the user is already speaking, and is let go after a stretch without
-// recordings (it holds about 1.1 GB). While recording, the last seconds are transcribed again
-// and again for a live preview; the final transcript is one run over the whole recording.
+// recordings (it holds 1 to 2.5 GB). While recording, the last seconds are transcribed again
+// and again for a live preview; the final transcript is the whole recording, cut at pauses.
 
 import type * as TranscribeCpp from "transcribe-cpp";
 
@@ -16,6 +16,12 @@ const SILENT_PEAK = 0.002;
 // length. The client shows the last few hundred characters, which hides the clipped first word.
 const PREVIEW_WINDOW_SECONDS = 20;
 const PREVIEW_PAUSE_MS = 800;
+// One run over minutes of audio goes wrong: Parakeet drifts into gibberish, and encoder-decoder
+// models (Cohere, Canary) stop at their token limit. The final transcript is run in pieces cut at
+// the quietest moment between these bounds.
+const CHUNK_MIN_SECONDS = 15;
+const CHUNK_MAX_SECONDS = 25;
+const PAUSE_FRAME = SAMPLE_RATE / 10;
 const MAX_RECORDING_SECONDS = 15 * 60;
 // A client that vanished mid-recording leaves its session behind.
 const ABANDONED_SESSION_MS = 2 * 60_000;
@@ -28,7 +34,7 @@ export interface DictationEngineOptions {
   readonly resolveModel: (language: string | undefined) => Promise<string>;
   /** Let go of the model after this long without a recording; 0 keeps it. */
   readonly idleUnloadMs: number;
-  /** transcribe.cpp backend. The CPU is the default: Vulkan returns empty text on some GPUs. */
+  /** transcribe.cpp backend; "auto" picks the GPU when there is one. */
   readonly backend?: TranscribeCpp.Backend;
   readonly now?: () => number;
   readonly log?: (message: string) => void;
@@ -58,6 +64,32 @@ interface RecordingSession {
 export function normalizeLanguage(language: string | undefined): string | undefined {
   const code = language?.trim().toLowerCase().split(/[-_]/)[0];
   return code ? code : undefined;
+}
+
+/** Cuts audio into pieces of at most CHUNK_MAX_SECONDS, each ending in its quietest stretch. */
+export function splitAtPauses(audio: Float32Array): ReadonlyArray<Float32Array> {
+  const min = CHUNK_MIN_SECONDS * SAMPLE_RATE;
+  const max = CHUNK_MAX_SECONDS * SAMPLE_RATE;
+  const pieces: Array<Float32Array> = [];
+  let start = 0;
+  while (audio.length - start > max) {
+    let cut = start + max;
+    let quietest = Infinity;
+    for (let frame = start + min; frame + PAUSE_FRAME <= start + max; frame += PAUSE_FRAME / 2) {
+      let energy = 0;
+      for (let index = frame; index < frame + PAUSE_FRAME; index++) {
+        energy += audio[index]! * audio[index]!;
+      }
+      if (energy < quietest) {
+        quietest = energy;
+        cut = frame + PAUSE_FRAME / 2;
+      }
+    }
+    pieces.push(audio.subarray(start, cut));
+    start = cut;
+  }
+  pieces.push(audio.subarray(start));
+  return pieces;
 }
 
 export function decodePcm16(base64: string): Float32Array {
@@ -140,14 +172,20 @@ export class DictationEngine {
     this.#previewAbort?.abort();
     const started = this.#now();
     const text = await this.#exclusive(async () => {
-      try {
-        const result = await loaded.session.run(audio, this.#runOptions(loaded, session.language));
-        return result.text;
-      } catch (error) {
-        const module = await this.#loadModule();
-        if (error instanceof module.InputTooShort) return "";
-        throw error;
+      const texts: Array<string> = [];
+      for (const piece of splitAtPauses(audio)) {
+        try {
+          const result = await loaded.session.run(
+            piece,
+            this.#runOptions(loaded, session.language),
+          );
+          texts.push(result.text);
+        } catch (error) {
+          const module = await this.#loadModule();
+          if (!(error instanceof module.InputTooShort)) throw error;
+        }
       }
+      return texts.join(" ");
     });
     this.#lastUsedAt = this.#now();
     const cleaned = text.split(/\s+/).filter(Boolean).join(" ");
@@ -256,7 +294,7 @@ export class DictationEngine {
       const module = await this.#loadModule();
       const started = this.#now();
       const model = await module.TranscribeModel.load(path, {
-        backend: this.#options.backend ?? "cpu",
+        backend: this.#options.backend ?? "auto",
       });
       const loaded: LoadedModel = {
         path,

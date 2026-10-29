@@ -3,6 +3,7 @@
 // transcribe.cpp, the engine with its model lookup, and turning a transcript into a result.
 
 import type { DictationFinishResult } from "@t3tools/contracts";
+import type * as TranscribeCpp from "transcribe-cpp";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -18,15 +19,40 @@ import { DEFAULT_STRUCTURE_CODEWORDS, removeFillers, splitCodeword } from "./tra
 
 const IDLE_UNLOAD_MS = 15 * 60_000;
 export const HOUSEKEEPING_INTERVAL_MS = 30_000;
+// oxlint-disable-next-line t3code/no-global-process-runtime -- Also runs in the desktop worker, which has no Effect runtime.
+const PLATFORM = process.platform;
 const NATIVE_LIBRARY_NAME =
-  process.platform === "win32"
+  PLATFORM === "win32"
     ? "transcribe.dll"
-    : process.platform === "darwin"
+    : PLATFORM === "darwin"
       ? "libtranscribe.dylib"
       : "libtranscribe.so";
 
+const BACKENDS = ["auto", "cpu", "cpu_accel", "cuda", "rocm", "vulkan", "metal"] as const;
+
+/** T3CODE_DICTATION_BACKEND, e.g. "cpu" when the GPU is busy or misbehaves; "auto" by default. */
+export function dictationBackend(value: string | undefined): TranscribeCpp.Backend {
+  const wanted = value?.trim().toLowerCase();
+  return BACKENDS.find((backend) => backend === wanted) ?? "auto";
+}
+
+// ggml-vulkan's cooperative-matrix path returns empty transcripts on AMD RDNA4 (RX 9070 XT);
+// without it the GPU is still about five times faster than the CPU. ggml reads the switch with
+// getenv when the backend starts. On Windows that is the C runtime's copy of the environment,
+// which `process.env` does not update, so it is set through the C runtime itself.
+const disableVulkanCoopmat = async (): Promise<void> => {
+  const name = "GGML_VK_DISABLE_COOPMAT";
+  if (process.env[name] !== undefined) return;
+  if (PLATFORM === "win32") {
+    const koffi = (await import("koffi")).default;
+    koffi.load("ucrtbase.dll").func("int _putenv_s(str, str)")(name, "1");
+  }
+  process.env[name] = "1";
+};
+
 // transcribe-cpp dlopens a native library; it is only loaded once someone dictates.
 const loadTranscribeCpp = async (): Promise<TranscribeModule> => {
+  await disableVulkanCoopmat();
   const module = (await import("transcribe-cpp")) as TranscribeModule;
   if (!process.env.TRANSCRIBE_LIBRARY) {
     // In the desktop app the package sits in an asar archive, which the OS loader cannot read;
@@ -54,6 +80,7 @@ export function makeLocalDictationEngine(log: (message: string) => void): Dictat
     resolveModel: (language) =>
       Effect.runPromise(resolveModel(language).pipe(Effect.provide(NodeServices.layer))),
     idleUnloadMs: IDLE_UNLOAD_MS,
+    backend: dictationBackend(process.env.T3CODE_DICTATION_BACKEND),
     log,
   });
 }
