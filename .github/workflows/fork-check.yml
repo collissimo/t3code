@@ -1,0 +1,55 @@
+# Fork check: typechecks pull requests into collin/main and every push to it.
+#
+# Upstream's ci.yml runs on Blacksmith runners a fork does not have, so its checks stay queued
+# forever and broken code reached collin/main unnoticed. This runs what fork-release.yml needs:
+# a frozen install and the typecheck of the apps the desktop build bundles.
+name: Fork check
+
+on:
+  pull_request:
+    branches: [collin/main]
+  push:
+    branches: [collin/main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    if: github.repository != 'pingdotgg/t3code'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
+      - name: Check out
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach "$GITHUB_SHA"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: VP_GIT_HOOKS=0 vp install --frozen-lockfile
+
+      - name: Typecheck server, desktop and web
+        run: |
+          set -euo pipefail
+          for app in server desktop web; do
+            (cd "apps/$app" && vp run typecheck)
+          done
