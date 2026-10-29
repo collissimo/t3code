@@ -13,10 +13,11 @@
 # fork/upstream-nightly-watcher, a Cloudflare Worker, checks every minute and sends
 # repository_dispatch once per new upstream nightly; the cron is only a fallback. Every trigger
 # builds only when that nightly or collin/main is new.
-# Nothing is pushed to a branch. Claude Code resolves a merge conflict for the build only
-# (fork/resolve-conflicts.sh, with the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret);
-# collin/main itself is still synced by fork/sync.sh. When Claude cannot resolve it, the run fails
-# (and GitHub mails the owner): then sync collin/main by hand.
+# Nothing is pushed to a branch. vp pack does not typecheck, so prepare does: Claude Code resolves
+# merge conflicts and fixes type errors for the build only (fork/resolve-merge.sh, with the
+# ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret); collin/main itself is still synced by
+# fork/sync.sh. When Claude cannot make it typecheck, the run fails (and GitHub mails the owner):
+# then sync collin/main by hand.
 name: Fork release
 # The watcher reads this title to dispatch each upstream nightly only once.
 run-name: ${{ github.event.client_payload.upstream_tag && format('Fork release of {0}', github.event.client_payload.upstream_tag) || 'Fork release' }}
@@ -98,8 +99,7 @@ jobs:
           fi
 
       # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
-      - name: Merge upstream into the fork
-        id: merge
+      - name: Check out the fork
         if: steps.due.outputs.due == 'true'
         env:
           GIT_TERMINAL_PROMPT: "0"
@@ -116,76 +116,66 @@ jobs:
           git fetch -q --no-tags upstream "$UPSTREAM_SHA"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
-          if git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"; then
-            echo "conflict=false" >> "$GITHUB_OUTPUT"
-          else
-            git diff --name-only --diff-filter=U | sed 's/^/::warning::conflict: /'
-            echo "conflict=true" >> "$GITHUB_OUTPUT"
-          fi
 
-      # One resolution per fork/upstream pair: a failed build leaves the pair due again on every run,
-      # and a retry must neither pay for nor re-roll the resolution. force asks Claude again.
-      - name: Restore an earlier resolution of these commits
+      # Before the merge: a conflicted package.json would break reading the Node version. The
+      # resolve script installs and typechecks with it.
+      - name: Setup Vite+
+        if: steps.due.outputs.due == 'true'
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Merge upstream into the fork
+        if: steps.due.outputs.due == 'true'
+        env:
+          UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          git merge -q --no-commit --no-ff -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA" ||
+            [[ -n "$(git diff --name-only --diff-filter=U)" ]]
+          git diff --name-only --diff-filter=U | sed 's/^/::warning::conflict: /'
+
+      # One result per fork/upstream pair: a failed build leaves the pair due again on every run,
+      # and a retry must neither pay for nor re-roll Claude's work. force asks Claude again.
+      - name: Restore an earlier result for these commits
         id: earlier
-        if: steps.merge.outputs.conflict == 'true' && !inputs.force
+        if: steps.due.outputs.due == 'true' && !inputs.force
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ${{ runner.temp }}/resolution
-          key: fork-merge-${{ steps.refs.outputs.fork_sha }}-${{ steps.refs.outputs.upstream_sha }}
+          path: ${{ runner.temp }}/merge
+          key: fork-build-${{ steps.refs.outputs.fork_sha }}-${{ steps.refs.outputs.upstream_sha }}
 
-      - name: Resolve conflicts with Claude
-        if: steps.merge.outputs.conflict == 'true' && steps.earlier.outputs.cache-hit != 'true'
+      # Resolves conflicts and fixes type errors (also of a clean merge, or of collin/main itself)
+      # with Claude, so a build only fails when Claude cannot make it typecheck.
+      - name: Resolve and typecheck
+        if: steps.due.outputs.due == 'true' && steps.earlier.outputs.cache-hit != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           DISABLE_AUTOUPDATER: "1"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
-          FORK_SHA: ${{ steps.refs.outputs.fork_sha }}
-          UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
         run: |
           set -euo pipefail
           [[ -n "$ANTHROPIC_API_KEY" ]] || unset ANTHROPIC_API_KEY
           [[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]] || unset CLAUDE_CODE_OAUTH_TOKEN
-          if [[ -z "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-            echo "::error::upstream no longer merges cleanly into $FORK_BRANCH and neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set; sync it by hand"
-            exit 1
-          fi
-          resolution="$RUNNER_TEMP/resolution"
-          mkdir -p "$resolution"
           npm install -g --silent @anthropic-ai/claude-code@2.1.306
           # The script of this workflow's commit, which differs from collin/main's on a dispatch from a branch.
           git fetch -q --no-tags origin "$GITHUB_SHA"
-          git show "$GITHUB_SHA:fork/resolve-conflicts.sh" > "$RUNNER_TEMP/resolve-conflicts.sh"
-          if bash "$RUNNER_TEMP/resolve-conflicts.sh"; then
-            git bundle create -q "$resolution/merge.bundle" HEAD "^$FORK_SHA" "^$UPSTREAM_SHA"
-          else
-            touch "$resolution/failed"
-          fi
+          git show "$GITHUB_SHA:fork/resolve-merge.sh" > "$RUNNER_TEMP/resolve-merge.sh"
+          bash "$RUNNER_TEMP/resolve-merge.sh"
 
-      - name: Remember the resolution
-        if: steps.merge.outputs.conflict == 'true' && steps.earlier.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ${{ runner.temp }}/resolution
-          key: fork-merge-${{ steps.refs.outputs.fork_sha }}-${{ steps.refs.outputs.upstream_sha }}
-
-      - name: Apply the resolution
-        if: steps.merge.outputs.conflict == 'true'
-        env:
-          CACHE_HIT: ${{ steps.earlier.outputs.cache-hit }}
+      - name: Apply the earlier result
+        if: steps.earlier.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          resolution="$RUNNER_TEMP/resolution"
-          if [[ -f "$resolution/failed" ]]; then
-            echo "::error::Claude could not resolve the conflicts with upstream (see the first run of these commits); sync $FORK_BRANCH by hand, or rerun with force"
-            exit 1
+          merge="$RUNNER_TEMP/merge"
+          git merge --abort 2>/dev/null || true
+          if [[ -f "$merge/merge.bundle" ]]; then
+            git fetch -q --no-tags "$merge/merge.bundle"
           fi
-          if [[ "$CACHE_HIT" == "true" ]]; then
-            git merge --abort
-            git fetch -q --no-tags "$resolution/merge.bundle"
-            git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
-          fi
-          git log -1 --format='Merge %H'
+          git -c checkout.workers=0 checkout -q --detach "$(cat "$merge/sha")"
 
       # The merge commit differs per job (timestamps) and a resolution must not be re-rolled, so the
       # build jobs check out this exact commit. The sha file keeps the artifact non-empty when
@@ -203,6 +193,13 @@ jobs:
           if [[ "$merge_sha" != "$FORK_SHA" && "$merge_sha" != "$UPSTREAM_SHA" ]]; then
             git bundle create -q "$RUNNER_TEMP/merge/merge.bundle" HEAD "^$FORK_SHA" "^$UPSTREAM_SHA"
           fi
+
+      - name: Remember the result
+        if: steps.due.outputs.due == 'true' && steps.earlier.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/merge
+          key: fork-build-${{ steps.refs.outputs.fork_sha }}-${{ steps.refs.outputs.upstream_sha }}
 
       - if: steps.due.outputs.due == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -266,56 +263,6 @@ jobs:
           fi
           echo "::error::The Cloudflare watcher missed upstream $UPSTREAM_TAG (published $published). Check it with: npx wrangler tail (in fork/upstream-nightly-watcher)"
           exit 1
-
-  # vp pack does not typecheck, so a type error would otherwise ship. Only the apps the desktop
-  # build bundles; publish waits for this.
-  typecheck:
-    needs: prepare
-    if: needs.prepare.outputs.due == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: merge
-          path: ${{ runner.temp }}/merge
-
-      - name: Check out the merge
-        env:
-          GIT_TERMINAL_PROMPT: "0"
-          FORK_SHA: ${{ needs.prepare.outputs.fork_sha }}
-          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
-        run: |
-          set -euo pipefail
-          merge="$RUNNER_TEMP/merge"
-          git init -q .
-          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git remote add upstream "$UPSTREAM_URL"
-          git fetch -q --no-tags origin "$FORK_SHA"
-          git fetch -q --no-tags upstream "$UPSTREAM_SHA"
-          if [[ -f "$merge/merge.bundle" ]]; then
-            git fetch -q --no-tags "$merge/merge.bundle"
-          fi
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git -c checkout.workers=0 checkout -q --detach "$(cat "$merge/sha")"
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
-        with:
-          node-version-file: package.json
-          cache: false
-          run-install: false
-
-      - name: Install dependencies
-        timeout-minutes: 15
-        run: vp install
-
-      - name: Typecheck server, desktop and web
-        run: |
-          set -euo pipefail
-          for app in server desktop web; do
-            (cd "apps/$app" && vp run typecheck)
-          done
 
   build:
     needs: prepare
@@ -439,7 +386,7 @@ jobs:
   # and GitHub refuses the same for a tag on an older fork commit whose workflows differ from the
   # head's (a fork commit pushed during the build). The release notes record what was built.
   publish:
-    needs: [prepare, typecheck, build]
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

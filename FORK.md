@@ -61,12 +61,19 @@ upstream's (the offset sorts a fork build above an upstream nightly of the same 
 nightly channel takes it, and a fork client and fork server on the other OS stay on the same
 version. `-f force=true` builds without new commits.
 
-A merge conflict is resolved by Claude Code (`fork/resolve-conflicts.sh`, Opus, at most $5 per
-run) for the build only; the typecheck job still gates the release. It needs the repository secret
-`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`; bills the subscription's monthly Agent SDK
-credit) or `ANTHROPIC_API_KEY` (Console API credits; wins when both are set). Each fork/upstream pair is resolved once and cached, so retries cost
-nothing. When Claude cannot resolve it, every run of that pair fails: sync `collin/main` by hand,
-then `gh workflow run fork-release.yml` (`-f force=true` asks Claude again instead).
+`vp pack` does not typecheck, so every build typechecks the merge first
+(`fork/resolve-merge.sh`): Claude Code (Opus, at most $5 per call) resolves merge conflicts, then
+gets up to two calls to fix whatever the typecheck reports, also in files git merged cleanly (one
+side calls what the other renamed) or broken on `collin/main` itself. Fixes go into the build
+only. It needs the repository secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`; bills
+the subscription's monthly Agent SDK credit) or `ANTHROPIC_API_KEY` (Console API credits; wins
+when both are set). Each fork/upstream pair is checked once and cached, so retries cost nothing.
+When Claude cannot make it typecheck, the run fails: sync `collin/main` by hand, then
+`gh workflow run fork-release.yml` (`-f force=true` asks Claude again instead).
+
+Pull requests into `collin/main` and pushes to it run `.github/workflows/fork-check.yml` (frozen
+install and the same typecheck). Upstream's CI needs Blacksmith runners a fork does not have; its
+workflows are disabled in this repository (Actions settings), otherwise their checks stay queued.
 
 Watcher setup (once, or after the token expires), from `fork/upstream-nightly-watcher/`:
 `npx wrangler deploy`, then copy a fine-grained token for `collissimo/t3code` (Contents: read and
