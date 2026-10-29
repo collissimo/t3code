@@ -98,8 +98,7 @@ jobs:
           fi
 
       # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
-      - name: Merge upstream into the fork
-        id: merge
+      - name: Check out the fork
         if: steps.due.outputs.due == 'true'
         env:
           GIT_TERMINAL_PROMPT: "0"
@@ -116,6 +115,24 @@ jobs:
           git fetch -q --no-tags upstream "$UPSTREAM_SHA"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git -c checkout.workers=0 checkout -q --detach "$FORK_SHA"
+
+      # Before the merge: a conflicted package.json would break reading the Node version. The
+      # resolve script installs and typechecks with it.
+      - name: Setup Vite+
+        if: steps.due.outputs.due == 'true'
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Merge upstream into the fork
+        id: merge
+        if: steps.due.outputs.due == 'true'
+        env:
+          UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
           if git merge -q --no-edit -m "Merge upstream ${UPSTREAM_SHA:0:12}" "$UPSTREAM_SHA"; then
             echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
