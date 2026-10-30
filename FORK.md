@@ -126,7 +126,7 @@ can be rebound in Settings → Keybindings ("Composer: Dictate").
   [huggingface.co/handy-computer](https://huggingface.co/handy-computer) (the `Q8_0` file).
 - It runs on the GPU when there is one (Vulkan; the log says `loaded … on Vulkan0`), about five
   times faster than the CPU. `T3CODE_DICTATION_BACKEND=cpu` keeps it on the CPU.
-- Long recordings are transcribed in pieces of at most 25 seconds, cut at pauses.
+- Long recordings are transcribed in pieces of at most 35 seconds, cut at pauses.
 - The model (1 to 2.5 GB) loads on the first chunk of a recording and is let go after 15
   minutes without one.
 - Structuring calls `claude --print --model haiku` on the thread's server; it needs a logged-in
