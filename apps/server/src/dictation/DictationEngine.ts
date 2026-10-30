@@ -1,9 +1,7 @@
-// Speech to text on the server's machine: Parakeet through transcribe.cpp.
-//
-// A client streams microphone audio into a recording session. The model loads on the first
-// chunk, while the user is already speaking, and is let go after a stretch without
-// recordings (it holds 1 to 2.5 GB). While recording, the last seconds are transcribed again
-// and again for a live preview; the final transcript is the whole recording, cut at pauses.
+// Speech to text on the server's machine through transcribe.cpp. A client streams microphone audio
+// into a recording session. The model loads on the first chunk and is let go after a stretch without
+// recordings (it holds 1 to 2.5 GB). The last seconds are transcribed repeatedly for a live preview;
+// the final transcript is the whole recording, cut at pauses.
 
 import type * as TranscribeCpp from "transcribe-cpp";
 
@@ -16,11 +14,12 @@ const SILENT_PEAK = 0.002;
 // length. The client shows the last few hundred characters, which hides the clipped first word.
 const PREVIEW_WINDOW_SECONDS = 20;
 const PREVIEW_PAUSE_MS = 800;
-// One run over minutes of audio goes wrong: Parakeet drifts into gibberish, and encoder-decoder
-// models (Cohere, Canary) stop at their token limit. The final transcript is run in pieces cut at
-// the quietest moment between these bounds.
-const CHUNK_MIN_SECONDS = 15;
-const CHUNK_MAX_SECONDS = 25;
+// One run over minutes of audio drifts (Parakeet) or stops at the token limit (Cohere, Canary), so
+// the final transcript runs in pieces cut at the quietest moment between these bounds. In shorter
+// pieces a thinking pause fills most of the audio and Cohere invents text for it: on real German
+// dictation 8-15 s got 19.6% of the words wrong, 15-25 s 14.5%, 25-35 s 10.8%.
+const CHUNK_MIN_SECONDS = 25;
+const CHUNK_MAX_SECONDS = 35;
 const PAUSE_FRAME = SAMPLE_RATE / 10;
 const MAX_RECORDING_SECONDS = 15 * 60;
 // A client that vanished mid-recording leaves its session behind.

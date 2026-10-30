@@ -94,16 +94,16 @@ describe("audio input", () => {
     pcm.writeInt16LE(-32768, 2);
     expect([...decodePcm16(pcm.toString("base64"))]).toEqual([0.5, -1]);
   });
-  it("cuts long audio at the quietest moment, never longer than 25 seconds", () => {
-    const audio = speech(70);
-    audio.fill(0, 18 * SAMPLE_RATE, 18.5 * SAMPLE_RATE);
+  it("cuts long audio at the quietest moment, never longer than 35 seconds", () => {
+    const audio = speech(100);
+    audio.fill(0, 28 * SAMPLE_RATE, 28.5 * SAMPLE_RATE);
     const pieces = splitAtPauses(audio);
     const cut = pieces[0]!.length / SAMPLE_RATE;
-    expect(cut).toBeGreaterThan(18);
-    expect(cut).toBeLessThan(18.5);
-    expect(pieces.every((piece) => piece.length <= 25 * SAMPLE_RATE)).toBe(true);
+    expect(cut).toBeGreaterThan(28);
+    expect(cut).toBeLessThan(28.5);
+    expect(pieces.every((piece) => piece.length <= 35 * SAMPLE_RATE)).toBe(true);
     expect(pieces.reduce((sum, piece) => sum + piece.length, 0)).toBe(audio.length);
-    expect(splitAtPauses(speech(25))).toHaveLength(1);
+    expect(splitAtPauses(speech(35))).toHaveLength(1);
   });
   it("reads the backend from the environment, auto when unset or unknown", () => {
     expect(dictationBackend(" CPU ")).toBe("cpu");
