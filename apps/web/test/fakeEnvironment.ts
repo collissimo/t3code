@@ -44,7 +44,7 @@ import * as Stream from "effect/Stream";
 import { RpcSchema } from "effect/rpc";
 
 export const ENVIRONMENT_ID = EnvironmentId.make("environment-render");
-const PROJECT_ID = ProjectId.make("project-render");
+export const PROJECT_ID = ProjectId.make("project-render");
 const CODEX = ProviderInstanceId.make("codex");
 const MODEL = { instanceId: CODEX, model: "gpt-5.4" };
 const AT = DateTime.makeUnsafe("2026-03-17T19:12:28.000Z");
@@ -307,6 +307,7 @@ const json = (body: unknown, status = 200) =>
 
 // Keyed by thread id: a live thread subscription's queue, for pushing events to it.
 const threadSubscribers = new Map<string, Queue.Queue<OrchestrationV2ThreadStreamItem>>();
+const shellSubscribers = new Set<Queue.Queue<OrchestrationV2ShellStreamItem>>();
 let threads: ReadonlyArray<FakeThread> = [];
 let sequence = 1;
 
@@ -325,19 +326,25 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
 
 const handlers: Record<string, (input: never) => unknown> = {
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
-    subscribe<OrchestrationV2ShellStreamItem>([
-      {
-        kind: "snapshot",
-        snapshot: {
-          schemaVersion: 1,
-          snapshotSequence: sequence,
-          projects: [project],
-          threads: threads.map(shellOf),
-          archivedThreads: [],
+    subscribe<OrchestrationV2ShellStreamItem>(
+      [
+        {
+          kind: "snapshot",
+          snapshot: {
+            schemaVersion: 1,
+            snapshotSequence: sequence,
+            projects: [project],
+            threads: threads.map(shellOf),
+            archivedThreads: [],
+          },
         },
+        { kind: "synchronized" },
+      ],
+      (queue) => {
+        shellSubscribers.add(queue);
+        return () => shellSubscribers.delete(queue);
       },
-      { kind: "synchronized" },
-    ]),
+    ),
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) => {
     const thread = threads.find((candidate) => candidate.id === input.threadId);
     if (!thread) return Stream.never;
@@ -436,6 +443,22 @@ export function installFakeEnvironment(fixtures: ReadonlyArray<FakeThread>): Dis
 }
 
 type ThreadEvent = Extract<OrchestrationV2ThreadStreamItem, { readonly kind: "event" }>["event"];
+
+/** Creates the thread on the server and lists it in the shell, as a first send does. */
+export async function createThread(thread: FakeThread): Promise<void> {
+  threads = [...threads, thread];
+  sequence += 1;
+  for (const queue of shellSubscribers) {
+    await Effect.runPromise(
+      Queue.offer(queue, {
+        kind: "thread.updated",
+        sequence,
+        location: "active",
+        thread: shellOf(thread),
+      }),
+    );
+  }
+}
 
 /** Whether the app holds a live subscription to the thread, so events reach it. */
 export function isThreadSubscribed(threadId: ThreadId): boolean {
