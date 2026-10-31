@@ -28,6 +28,7 @@ import { loadWindowsForegroundApi } from "../electron/WindowsForeground.ts";
 import { activeWindow } from "../snapShot/ActiveWindow.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { ScrawlInputTracker } from "./inputTracker.ts";
+import { renderScrawlShim, scrawlShimName } from "./scrawlShim.ts";
 
 const DEFAULT_SHORTCUT = "Alt+Shift+S";
 // Another program (the Scrawl app uses the same keys) may hold the shortcut and let go of it later.
@@ -39,7 +40,7 @@ const VK_LBUTTON = 0x01;
 const VK_SHIFT = 0x10;
 // Like Scrawl: frames, text and contact sheet stay, the heavy media goes.
 const MEDIA_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
-const MEDIA_FILES = ["recording.mp4", "recording.webm", "audio.wav"];
+const MEDIA_FILES = ["recording.mp4", "recording.webm", "audio.wav", "zoom"];
 const PILL_WIDTH = 96;
 const PILL_HEIGHT = 30;
 
@@ -86,7 +87,9 @@ const dropOldMedia = async (capturesDir: string, now: number) => {
     const stat = await NodeFSP.stat(folder).catch(() => null);
     if (stat === null || now - stat.mtimeMs < MEDIA_KEPT_MS) continue;
     await Promise.all(
-      MEDIA_FILES.map((file) => NodeFSP.rm(NodePath.join(folder, file), { force: true })),
+      MEDIA_FILES.map((file) =>
+        NodeFSP.rm(NodePath.join(folder, file), { force: true, recursive: true }),
+      ),
     ).catch(() => undefined);
   }
 };
@@ -132,6 +135,27 @@ const make = Effect.gen(function* () {
   // Finished captures keep writing their frames and summary after the watcher stopped.
   const bundles = new Map<string, string>();
   let nextIndex = 0;
+  const lookCloserCommand = NodePath.join(
+    environment.baseDir,
+    "bin",
+    scrawlShimName(environment.platform),
+  );
+  // Written on every start: the executable's path changes when the app moves or the channel does.
+  const shimWritten = environment.isPackaged
+    ? yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(NodePath.dirname(lookCloserCommand), { recursive: true });
+        await NodeFSP.writeFile(
+          lookCloserCommand,
+          renderScrawlShim({
+            platform: environment.platform,
+            executable: process.execPath,
+            t3Home: environment.baseDir,
+          }),
+          { mode: 0o755 },
+        );
+        return true;
+      }).pipe(Effect.catchDefect(() => Effect.succeed(false)))
+    : false;
 
   const ink = (capture: RunningCapture, script: string) => {
     if (!capture.ink.isDestroyed()) void capture.ink.webContents.executeJavaScript(script, true);
@@ -264,6 +288,7 @@ const make = Effect.gen(function* () {
       app: front?.owner.name.replace(/\.exe$/i, "") ?? "",
       windowTitle: front?.title ?? "",
       bundlePath,
+      ...(shimWritten ? { lookCloserCommand } : {}),
     } satisfies ScrawlStartResult;
   });
 

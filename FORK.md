@@ -169,5 +169,11 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 - The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
   not keep it out on Windows 10 22H2.
 - Bundles are in `<T3 home>/scrawl/captures` in Scrawl's format, so the Scrawl skill and the
-  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them. Video and audio are deleted after 7 days.
+  `scrawl` CLI read them too. Video, audio and `zoom/` are deleted after 7 days.
+- Agents look closer with `<T3 home>/bin/t3-scrawl.cmd` (`t3-scrawl` elsewhere), which the app writes
+  at every start and the pasted text names: `zoom <bundle> --at 0:21|"a phrase"|--mark N`, `frames
+  --from --to`, `inspect [--json|--marks]`, `export [--out] [--zoom] [--crop] [--size]`. It needs no
+  Scrawl app and no running T3 Code. The app's exe does the work with `--scrawl`: Chromium is the
+  only video decoder in the app, so plain Node (`t3.cmd`) and a shipped ffmpeg lost to a hidden page
+  running mediabunny on WebCodecs. Agents on another machine cannot reach the bundle either way.
 - Code: `apps/desktop/src/scrawl/`, `apps/web/src/scrawl/`, `packages/contracts/src/scrawl.ts`.
