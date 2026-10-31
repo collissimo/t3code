@@ -18,14 +18,15 @@ import {
   startMicrophoneCapture,
   type MicrophoneCapture,
 } from "./microphoneCapture";
-import { defaultDictationLanguage } from "./dictationLanguages";
+import { DEFAULT_DICTATION_LANGUAGE } from "./dictationLanguages";
 
 // Dictation into the composer: the microphone is recorded here and streamed to a local speech
 // model, which writes the transcript. On request (the structured shortcut, or "Reinschrift"
 // spoken at the end) the thread's server rewrites it into a structured prompt first.
 
 const SEND_INTERVAL_MS = 500;
-const LANGUAGE_KEY = "t3code:dictation-language";
+// A new key: the old one may hold a choice made when a flag still showed it, now easy to overlook.
+const LANGUAGE_KEY = "t3code:dictation-language-v2";
 
 export type DictationPhase = "idle" | "starting" | "recording" | "transcribing" | "structuring";
 
@@ -85,7 +86,7 @@ export function useDictation(input: {
   const structure = useAtomCommand(serverEnvironment.dictationStructure, { reportFailure: false });
   const [language, setLanguage] = useLocalStorage(
     LANGUAGE_KEY,
-    defaultDictationLanguage(navigator.language),
+    DEFAULT_DICTATION_LANGUAGE,
     Schema.String,
   );
   const [state, setRenderedState] = useState<DictationState>(IDLE);
