@@ -210,6 +210,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+g", command: "composer.branch", when: "!terminalFocus" },
   { key: "f9", command: "composer.dictate", when: "!terminalFocus" },
   { key: "f8", command: "composer.dictateStructured", when: "!terminalFocus" },
+  { key: "shift+f9", command: "composer.dictationHistory", when: "!terminalFocus" },
   { key: "mod+shift+l", command: "composer.previousWorktree", when: "!terminalFocus" },
   { key: "mod+shift+k", command: "pullRequest.copyNumber", when: "!terminalFocus" },
   { key: "mod+shift+arrowup", command: "modelPicker.previousProvider", when: "modelPickerOpen" },

@@ -16,6 +16,8 @@ const renderButton = (onLanguageChange: (language: string) => void) =>
       onToggle={() => {}}
       dictateShortcutLabel={null}
       structuredShortcutLabel={null}
+      historyShortcutLabel={null}
+      onOpenHistory={() => {}}
       language="de"
       onLanguageChange={onLanguageChange}
     />,

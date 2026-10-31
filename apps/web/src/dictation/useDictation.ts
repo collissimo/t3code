@@ -18,6 +18,7 @@ import {
   startMicrophoneCapture,
   type MicrophoneCapture,
 } from "./microphoneCapture";
+import { addDictationHistoryEntry } from "./dictationHistory";
 import { DEFAULT_DICTATION_LANGUAGE } from "./dictationLanguages";
 
 // Dictation into the composer: the microphone is recorded here and streamed to a local speech
@@ -54,6 +55,15 @@ interface Recording {
 }
 
 const IDLE: DictationState = { phase: "idle", preview: "", structured: false, notice: null };
+
+// Dictating must keep working when the history cannot be written.
+const recordInHistory = (text: string, structured: boolean) => {
+  void addDictationHistoryEntry({ text, createdAt: Date.now(), structured }).catch(
+    (error: unknown) => {
+      console.warn("dictation: history entry could not be saved", error);
+    },
+  );
+};
 
 const failureText = (result: { readonly _tag: "Failure" }) => {
   const error = squashAtomCommandFailure(result as never) as unknown;
@@ -238,6 +248,8 @@ export function useDictation(input: {
       return;
     }
     const result = await transcribe.finish(recording.sessionId);
+    // Before the generation check: leaving the thread drops the insert, not what was said.
+    if (result.ok && result.value.text !== "") recordInHistory(result.value.text, false);
     if (generation !== generationRef.current) return;
     if (!result.ok) {
       setState(IDLE);
@@ -270,11 +282,16 @@ export function useDictation(input: {
       deliver(text, "Structuring failed · inserted unchanged");
       return;
     }
+    recordInHistory(rewritten.value.text, true);
     deliver(rewritten.value.text, null);
   };
 
   const deliver = (text: string, warning: string | null) => {
     setState(IDLE);
+    place(text, warning);
+  };
+
+  const place = (text: string, warning: string | null) => {
     if (inputRef.current.insert(text)) {
       notify(
         warning ? { text: warning, tone: "warning" } : { text: "Inserted", tone: "success" },
@@ -342,5 +359,8 @@ export function useDictation(input: {
     [],
   );
 
-  return { state, toggle, cancel, language, setLanguage };
+  /** Puts an earlier dictation into the composer; a running recording carries on. */
+  const insertFromHistory = (text: string) => place(text, null);
+
+  return { state, toggle, cancel, insertFromHistory, language, setLanguage };
 }

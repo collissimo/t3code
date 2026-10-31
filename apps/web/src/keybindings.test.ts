@@ -425,6 +425,17 @@ describe("model picker navigation helpers", () => {
   });
 });
 
+describe("dictation shortcuts", () => {
+  it("keeps the history on Shift+F9 apart from dictating on F9", () => {
+    const resolve = (shiftKey: boolean) =>
+      resolveShortcutCommand(event({ key: "F9", shiftKey }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        context: { terminalFocus: false },
+      });
+    assert.strictEqual(resolve(false), "composer.dictate");
+    assert.strictEqual(resolve(true), "composer.dictationHistory");
+  });
+});
+
 describe("chat/editor shortcuts", () => {
   it("toggles the thread panel by default without taking terminal keystrokes", () => {
     for (const platform of ["MacIntel", "Win32", "Linux"]) {
