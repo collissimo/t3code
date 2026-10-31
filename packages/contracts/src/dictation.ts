@@ -30,11 +30,21 @@ export type DictationAppendResult = typeof DictationAppendResult.Type;
 
 export const DictationFinishInput = Schema.Struct({
   sessionId: DictationSessionId,
+  /** Also time each word. Only screen captures need this; dictation keeps its reply small. */
+  words: Schema.optional(Schema.Boolean),
 });
 export type DictationFinishInput = typeof DictationFinishInput.Type;
 
 export const DictationNoTextReason = Schema.Literals(["no-speech", "no-audio"]);
 export type DictationNoTextReason = typeof DictationNoTextReason.Type;
+
+export const DictationWord = Schema.Struct({
+  text: Schema.String,
+  /** Milliseconds from the start of the recording, pauses included. */
+  t0: Schema.Number,
+  t1: Schema.Number,
+});
+export type DictationWord = typeof DictationWord.Type;
 
 export const DictationFinishResult = Schema.Struct({
   /** Cleaned transcript; empty when nothing was recognized, and `reason` says why. */
@@ -42,6 +52,7 @@ export const DictationFinishResult = Schema.Struct({
   reason: Schema.optional(DictationNoTextReason),
   /** The speaker ended with the codeword that asks for a structured rewrite (already cut). */
   structureRequested: Schema.Boolean,
+  words: Schema.optional(Schema.Array(DictationWord)),
 });
 export type DictationFinishResult = typeof DictationFinishResult.Type;
 

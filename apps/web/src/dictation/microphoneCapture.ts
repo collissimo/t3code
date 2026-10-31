@@ -13,6 +13,8 @@ export interface MicrophoneCapture {
   /** PCM recorded since the previous call, as base64 of 16-bit little-endian samples. */
   readonly takePcm: () => string;
   readonly stop: () => void;
+  /** The raw track, for a screen recording that wants the voice too. */
+  readonly stream: MediaStream;
 }
 
 // From the app root, not the current route: /<thread>/x.js would hit the SPA fallback.
@@ -76,6 +78,7 @@ export async function startMicrophoneCapture(): Promise<MicrophoneCapture> {
   }
 
   return {
+    stream,
     takePcm: () => {
       const taken = blocks.splice(0, blocks.length);
       return encodePcm16(taken);

@@ -11,6 +11,13 @@ import {
 } from "./methods/localEnvironment.ts";
 import { dictationAppend, dictationCancel, dictationFinish } from "./methods/dictation.ts";
 import {
+  scrawlAppendVideo,
+  scrawlCancel,
+  scrawlStart,
+  scrawlStop,
+  scrawlWriteFile,
+} from "./methods/scrawl.ts";
+import {
   getAdvertisedEndpoints,
   getServerExposureState,
   setServerExposureMode,
@@ -100,6 +107,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setLocalEnvironmentEnabled);
   yield* ipc.handle(dictationAppend);
   yield* ipc.handle(dictationFinish);
+  yield* ipc.handle(scrawlStart);
+  yield* ipc.handle(scrawlStop);
+  yield* ipc.handle(scrawlCancel);
+  yield* ipc.handle(scrawlAppendVideo);
+  yield* ipc.handle(scrawlWriteFile);
   yield* ipc.handle(dictationCancel);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 

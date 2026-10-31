@@ -27,7 +27,7 @@ import { DEFAULT_DICTATION_LANGUAGE } from "./dictationLanguages";
 
 const SEND_INTERVAL_MS = 500;
 // A new key: the old one may hold a choice made when a flag still showed it, now easy to overlook.
-const LANGUAGE_KEY = "t3code:dictation-language-v2";
+export const DICTATION_LANGUAGE_KEY = "t3code:dictation-language-v2";
 
 export type DictationPhase = "idle" | "starting" | "recording" | "transcribing" | "structuring";
 
@@ -95,7 +95,7 @@ export function useDictation(input: {
   const cancelSession = useAtomCommand(serverEnvironment.dictationCancel, { reportFailure: false });
   const structure = useAtomCommand(serverEnvironment.dictationStructure, { reportFailure: false });
   const [language, setLanguage] = useLocalStorage(
-    LANGUAGE_KEY,
+    DICTATION_LANGUAGE_KEY,
     DEFAULT_DICTATION_LANGUAGE,
     Schema.String,
   );
