@@ -20,7 +20,6 @@ import {
   windowSnapshots,
   type Crop,
   type CursorSample,
-  type LoggedWindows,
   type Rect,
 } from "./autocrop";
 import { changeRegions, contentMap, type ContentMap, type RgbaImage } from "./autocropContent";
@@ -41,6 +40,7 @@ import {
   type TimedWord,
 } from "./narration";
 import { withoutInkChanges } from "./sceneChanges";
+import { windowChanges } from "./windowChanges";
 
 const SHEET_BACKGROUND = "rgb(28, 29, 34)";
 
@@ -59,9 +59,6 @@ export interface CaptureRecording {
   readonly durationMs: number;
   readonly sceneChanges: ReadonlyArray<number>;
   readonly wav: Uint8Array;
-  /** Scrawl's window log and cursor samples, on the clock of `input`. Crops are better with them. */
-  readonly windows?: ReadonlyArray<LoggedWindows>;
-  readonly cursor?: ReadonlyArray<CursorSample>;
 }
 
 // Scrawl stores flat [x, y, dt] triples with positions in 0..=10000.
@@ -77,7 +74,14 @@ const manifestStroke = (stroke: ScrawlStroke, width: number, height: number) => 
       count > 1 ? Math.round((span * index) / (count - 1)) : 0,
     );
   }
-  return { t0: stroke.t0, t1: stroke.t1, fw: width, fh: height, pts };
+  return {
+    t0: stroke.t0,
+    t1: stroke.t1,
+    fw: width,
+    fh: height,
+    pts,
+    ...(stroke.on === undefined ? {} : { on: stroke.on }),
+  };
 };
 
 const KEYFRAME_REASONS: Record<NarrationLine["actions"][number]["kind"], string> = {
@@ -86,6 +90,7 @@ const KEYFRAME_REASONS: Record<NarrationLine["actions"][number]["kind"], string>
   drag: "click",
   scene: "scene_change",
   scroll: "scene_change",
+  note: "scene_change",
 };
 
 export interface BuiltBundle {
@@ -93,6 +98,18 @@ export interface BuiltBundle {
   readonly contactSheet: Blob;
   readonly lines: ReadonlyArray<NarrationLine>;
 }
+
+// Scrawl's time-only marker: no ink, the whole screen, and always a keyframe of its own.
+const flagsToMarks = (flags: ReadonlyArray<number>) =>
+  flags.map((t, index) => ({
+    id: `f${index + 1}`,
+    t0: t,
+    t1: t,
+    strokes: [],
+    boxNorm: [0, 0, 1, 1] as [number, number, number, number],
+    shape: "flag" as const,
+    description: "flagged this moment",
+  }));
 
 const seekTo = (video: HTMLVideoElement, seconds: number) =>
   new Promise<void>((resolve, reject) => {
@@ -244,7 +261,7 @@ const formatDuration = (ms: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
-const summaryText = (
+export const summaryText = (
   recording: Pick<CaptureRecording, "session" | "durationMs">,
   lines: ReadonlyArray<NarrationLine>,
   croppedTo: string | null,
@@ -265,24 +282,29 @@ export async function buildBundle(
 ): Promise<BuiltBundle> {
   const shift = (t: number) => Math.max(0, t - recording.inputOffsetMs);
   const events = recording.input.events.map((event) =>
-    event.kind === "click"
-      ? { ...event, t: shift(event.t) }
-      : { ...event, t: shift(event.t), t1: shift(event.t1) },
+    event.kind === "drag"
+      ? { ...event, t: shift(event.t), t1: shift(event.t1) }
+      : { ...event, t: shift(event.t) },
   );
+  const windows = recording.input.windows.map((snapshot) => ({
+    ...snapshot,
+    t: shift(snapshot.t),
+  }));
   const strokes = recording.input.strokes.map((stroke) => ({
     ...stroke,
     t0: shift(stroke.t0),
     t1: shift(stroke.t1),
   }));
-  const marks = marksOf(strokes, recording.session.width, recording.session.height);
+  const inkMarks = marksOf(strokes, recording.session.width, recording.session.height);
+  const marks = [...inkMarks, ...flagsToMarks(recording.input.flags.map(shift))];
   const sceneChanges = withoutInkChanges(recording.sceneChanges, strokes, SCRAWL_INK_HOLD_MS);
   const lines = buildNarration({
     words: recording.words,
-    events,
+    events: [...events, ...windowChanges(windows)],
     marks,
     durationMs: recording.durationMs,
     sceneChanges,
-    markGroups: groupMarks(marks, {
+    markGroups: groupMarks(inkMarks, {
       actionTimes: events.flatMap((event) =>
         event.kind === "click" || event.kind === "drag" ? [event.t] : [],
       ),
@@ -292,11 +314,7 @@ export async function buildBundle(
   });
   const { width, height } = recording.session;
   const screen = [width, height] as const;
-  const windows = (recording.windows ?? []).map((snapshot) => ({
-    ...snapshot,
-    t: Math.round(shift(snapshot.t)),
-  }));
-  const cursor = (recording.cursor ?? []).map(([t, x, y]): CursorSample => [
+  const cursor = recording.input.cursor.map(([t, x, y]): CursorSample => [
     Math.round(shift(t)),
     x,
     y,
@@ -349,7 +367,7 @@ export async function buildBundle(
           durationMs: recording.durationMs,
           keyframes: keyframeTimes,
           strokes,
-          events,
+          events: events.filter((event) => event.kind === "click" || event.kind === "drag"),
           changes,
           inkOwners,
           inputOwner: (t) => {

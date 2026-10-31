@@ -160,6 +160,18 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 
 - Desktop app only: a browser cannot see the whole screen, and mobile has no such thing. Clicks and
   ink need Windows; elsewhere a capture has voice and video.
+- **Alt+Shift+F** flags a moment while recording (`⚑`, always its own keyframe). The pill shows the
+  flag for a moment.
+- Besides clicks and ink, a capture logs the wheel, the cursor, which windows are on screen, app
+  switches, Ctrl and Win shortcuts, and what a click or stroke landed on (`clicked button “Area”`).
+  Only the cursor and flags work outside Windows. Typed text is never logged, AltGr counts as
+  typing, passwords are never read, and window titles stay in `scrawl.json`: they do not reach the
+  text an agent reads. Fields say only that they were clicked, not what they are called.
+- This runs in two helper processes, for the length of a capture: one reads Raw Input (no system-wide
+  hook, so no program's mouse waits on it) and the window list, the other is a PowerShell asking UI
+  Automation (about 80 MB). The first lookup in a Chromium-based app turns on that app's accessibility
+  tree, which can slow a heavy page. T3 Code's own windows are not looked up, so clicks on them stay
+  unnamed. A precision touchpad's two-finger scroll may not show as Raw Input wheel events (unchecked).
 - While the Scrawl app runs it holds Alt+Shift+S. T3 Code logs that and takes the shortcut within
   15 seconds of Scrawl closing. The composer button works either way.
 - Speech and pointing do not run in step, so sentences are never cut at a click: whole sentences
