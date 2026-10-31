@@ -150,3 +150,22 @@ can be rebound in Settings → Keybindings ("Composer: Dictate").
   `apps/web/src/components/chat/ComposerDictationButton.tsx`, `packages/contracts/src/dictation.ts`.
   The standalone app for every other program is [collissimo/t3-voice](https://github.com/collissimo/t3-voice);
   it leaves F9 to T3 Code while T3 Code is in front.
+
+### Screen capture (Scrawl, built in)
+
+**Alt+Shift+S** anywhere, or the screen button in the composer, records the monitor under the
+mouse, also while another program is in front. Talk, click, hold **Shift** and move the mouse to
+draw red ink (it fades 5 seconds after Shift is let go). Alt+Shift+S again finishes: the text and
+the contact sheet land in the composer on screen. Esc in T3 Code discards a capture.
+
+- Desktop app only: a browser cannot see the whole screen, and mobile has no such thing. Clicks and
+  ink need Windows; elsewhere a capture has voice and video.
+- While the Scrawl app runs it holds Alt+Shift+S. T3 Code logs that and takes the shortcut within
+  15 seconds of Scrawl closing. The composer button works either way.
+- Speech and pointing do not run in step, so sentences are never cut at a click: whole sentences
+  own a keyframe, click bursts fold into one (`clicked ×3`), and clicks the screen did not answer
+  read as `pointed`. On 32 real captures this took cuts through sentences from 59 of 127 lines to 1.
+- Uses the dictation model above, with word times mapped back across the pauses it cuts out.
+- Bundles are in `<T3 home>/scrawl/captures` in Scrawl's format, so the Scrawl skill and the
+  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them. Video and audio are deleted after 7 days.
+- Code: `apps/desktop/src/scrawl/`, `apps/web/src/scrawl/`, `packages/contracts/src/scrawl.ts`.

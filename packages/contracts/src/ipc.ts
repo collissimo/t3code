@@ -19,6 +19,13 @@ import type {
   DictationFinishInput,
   DictationFinishResult,
 } from "./dictation.ts";
+import type {
+  ScrawlAppendVideoInput,
+  ScrawlCaptureRef,
+  ScrawlStartResult,
+  ScrawlStopResult,
+  ScrawlWriteFileInput,
+} from "./scrawl.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -1051,6 +1058,12 @@ export interface DesktopBridge {
     input: DictationFinishInput,
   ) => Promise<DesktopDictationOutcome<DictationFinishResult>>;
   dictationCancel?: (input: DictationCancelInput) => Promise<void>;
+  /** Screen captures with voice, clicks and ink; only the desktop app can see the whole screen. */
+  scrawlStart?: () => Promise<ScrawlStartResult>;
+  scrawlStop?: (input: ScrawlCaptureRef) => Promise<ScrawlStopResult>;
+  scrawlCancel?: (input: ScrawlCaptureRef) => Promise<void>;
+  scrawlAppendVideo?: (input: ScrawlAppendVideoInput) => Promise<void>;
+  scrawlWriteFile?: (input: ScrawlWriteFileInput) => Promise<void>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;

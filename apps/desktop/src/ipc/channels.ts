@@ -39,6 +39,11 @@ export const SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:set-local-environm
 export const DICTATION_APPEND_CHANNEL = "desktop:dictation-append";
 export const DICTATION_FINISH_CHANNEL = "desktop:dictation-finish";
 export const DICTATION_CANCEL_CHANNEL = "desktop:dictation-cancel";
+export const SCRAWL_START_CHANNEL = "desktop:scrawl-start";
+export const SCRAWL_STOP_CHANNEL = "desktop:scrawl-stop";
+export const SCRAWL_CANCEL_CHANNEL = "desktop:scrawl-cancel";
+export const SCRAWL_APPEND_VIDEO_CHANNEL = "desktop:scrawl-append-video";
+export const SCRAWL_WRITE_FILE_CHANNEL = "desktop:scrawl-write-file";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";

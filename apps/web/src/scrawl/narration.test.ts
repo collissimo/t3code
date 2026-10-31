@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildNarration,
@@ -72,6 +72,33 @@ describe("buildNarration", () => {
     expect(formatNarrationLine(lines[0]!, 0)).toBe(
       "- #1 (0:01) [marked, clicked ×2] “Bitte diese Boxen hier entfernen und den Text darunter auch.”",
     );
+  });
+
+  it("tells a click the screen answered from a hand that was pointing", () => {
+    const lines = buildNarration({
+      words: say("Das hier und das hier.", 0),
+      events: [
+        { kind: "click", t: 100, x: 0.1, y: 0.1 },
+        { kind: "click", t: 200, x: 0.2, y: 0.1 },
+        { kind: "click", t: 5_000, x: 0.5, y: 0.5 },
+      ],
+      marks: [],
+      durationMs: 7_000,
+      sceneChanges: [5_400],
+    });
+    expect(formatNarrationLine(lines[0]!, 0)).toContain("[pointed ×2]");
+    expect(formatNarrationLine(lines[1]!, 1)).toBe("- #2 (0:05) clicked");
+  });
+
+  it("says what a keyframe without words or actions shows", () => {
+    const lines = buildNarration({
+      words: [],
+      events: [],
+      marks: [],
+      durationMs: 3_000,
+      sceneChanges: [2_000],
+    });
+    expect(formatNarrationLine(lines[0]!, 0)).toBe("- #1 (0:02) screen changed");
   });
 
   it("gives a click said over no speech its own line", () => {

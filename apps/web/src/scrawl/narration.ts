@@ -35,12 +35,14 @@ export type NarrationAction =
       readonly t0: number;
       readonly t1: number;
       readonly count: number;
-      readonly x: number;
-      readonly y: number;
+      readonly points: ReadonlyArray<readonly [number, number]>;
+      /** False when the screen did not react: the hand was pointing, not operating anything. */
+      readonly changed?: boolean;
     }
   | { readonly kind: "drag"; readonly t0: number; readonly t1: number; readonly direction: string }
   | { readonly kind: "scroll"; readonly t0: number; readonly t1: number }
-  | { readonly kind: "mark"; readonly t0: number; readonly t1: number; readonly id: string };
+  | { readonly kind: "mark"; readonly t0: number; readonly t1: number; readonly id: string }
+  | { readonly kind: "scene"; readonly t0: number; readonly t1: number };
 
 export interface NarrationLine {
   readonly t0: number;
@@ -63,6 +65,7 @@ interface Sentence {
 const ABANDONED_GAP_MS = 5_000;
 const MAX_SENTENCE_WORDS = 60;
 const BURST_GAP_MS = 1_500;
+const REACTION_MS = 1_000;
 const SCROLL_GAP_MS = 1_500;
 // Scrawl's rule: a drag this short (as a share of the screen) is the hand moving, not an act.
 const SHORT_DRAG = 0.15;
@@ -79,6 +82,7 @@ const SCORES: Record<NarrationAction["kind"], number> = {
   mark: 100,
   clicks: 60,
   drag: 50,
+  scene: 40,
   scroll: 30,
 };
 
@@ -123,31 +127,27 @@ export function foldActions(
     t1: mark.t1,
     id: mark.id,
   }));
-  let burst: { t0: number; t1: number; count: number; x: number; y: number } | null = null;
-  let scroll: { t0: number; t1: number } | null = null;
-  const closeBurst = () => {
-    if (burst !== null) actions.push({ kind: "clicks", ...burst });
-    burst = null;
-  };
-  const closeScroll = () => {
-    if (scroll !== null) actions.push({ kind: "scroll", ...scroll });
-    scroll = null;
-  };
+  const bursts: Array<{
+    t0: number;
+    t1: number;
+    count: number;
+    points: Array<readonly [number, number]>;
+  }> = [];
+  const scrolls: Array<{ t0: number; t1: number }> = [];
   for (const event of [...events].sort((a, b) => a.t - b.t)) {
     if (event.kind === "click") {
-      if (burst !== null && event.t - burst.t1 <= BURST_GAP_MS) {
-        burst = { ...burst, t1: event.t, count: burst.count + 1, x: event.x, y: event.y };
+      const burst = bursts.at(-1);
+      if (burst !== undefined && event.t - burst.t1 <= BURST_GAP_MS) {
+        burst.t1 = event.t;
+        burst.count++;
+        burst.points.push([event.x, event.y]);
       } else {
-        closeBurst();
-        burst = { t0: event.t, t1: event.t, count: 1, x: event.x, y: event.y };
+        bursts.push({ t0: event.t, t1: event.t, count: 1, points: [[event.x, event.y]] });
       }
     } else if (event.kind === "scroll") {
-      if (scroll !== null && event.t - scroll.t1 <= SCROLL_GAP_MS) {
-        scroll = { ...scroll, t1: event.t };
-      } else {
-        closeScroll();
-        scroll = { t0: event.t, t1: event.t };
-      }
+      const scroll = scrolls.at(-1);
+      if (scroll !== undefined && event.t - scroll.t1 <= SCROLL_GAP_MS) scroll.t1 = event.t;
+      else scrolls.push({ t0: event.t, t1: event.t });
     } else {
       const dx = event.x1 - event.x0;
       const dy = event.y1 - event.y0;
@@ -161,8 +161,8 @@ export function foldActions(
       }
     }
   }
-  closeBurst();
-  closeScroll();
+  for (const burst of bursts) actions.push({ kind: "clicks", ...burst });
+  for (const scroll of scrolls) actions.push({ kind: "scroll", ...scroll });
   return actions.sort((a, b) => a.t0 - b.t0);
 }
 
@@ -233,14 +233,39 @@ const frameTimeOf = (t0: number, actions: ReadonlyArray<NarrationAction>, durati
   return Math.min(moment.t1 + settle, durationMs);
 };
 
+/** Clicks the screen answered stay clicks; the rest are marked as pointing. */
+const withReactions = (
+  actions: ReadonlyArray<NarrationAction>,
+  sceneChanges: ReadonlyArray<number>,
+): Array<NarrationAction> => {
+  const clickTimes = actions.filter((action) => action.kind === "clicks");
+  const reacted = (action: { readonly t0: number; readonly t1: number }) =>
+    sceneChanges.some((t) => t >= action.t0 && t <= action.t1 + REACTION_MS);
+  const scenes: Array<NarrationAction> = sceneChanges
+    .filter((t) => !clickTimes.some((a) => t >= a.t0 && t <= a.t1 + REACTION_MS))
+    .map((t) => ({ kind: "scene", t0: t, t1: t }));
+  return [
+    ...actions.map((action) =>
+      action.kind === "clicks" ? { ...action, changed: reacted(action) } : action,
+    ),
+    ...scenes,
+  ].toSorted((a, b) => a.t0 - b.t0);
+};
+
 export function buildNarration(input: {
   readonly words: ReadonlyArray<TimedWord>;
   readonly events: ReadonlyArray<CaptureEvent>;
   readonly marks: ReadonlyArray<CaptureMark>;
   readonly durationMs: number;
+  /** When the screen changed; without it clicks are taken at face value. */
+  readonly sceneChanges?: ReadonlyArray<number>;
 }): Array<NarrationLine> {
   const sentences = splitSentences(input.words);
-  attach(sentences, foldActions(input.events, input.marks));
+  const folded = foldActions(input.events, input.marks);
+  attach(
+    sentences,
+    input.sceneChanges === undefined ? folded : withReactions(folded, input.sceneChanges),
+  );
   const owners = chooseFrameOwners(sentences, input.durationMs);
   const groups: Array<Array<Sentence>> = [];
   let ownerSeen = false;
@@ -272,18 +297,22 @@ const formatClock = (ms: number) => {
 const describeActions = (actions: ReadonlyArray<NarrationAction>) => {
   let marks = 0;
   let clicks = 0;
+  let pointed = 0;
   let scrolled = false;
   const drags = new Set<string>();
   for (const action of actions) {
     if (action.kind === "mark") marks++;
-    else if (action.kind === "clicks") clicks += action.count;
-    else if (action.kind === "scroll") scrolled = true;
-    else drags.add(action.direction);
+    else if (action.kind === "clicks") {
+      if (action.changed === false) pointed += action.count;
+      else clicks += action.count;
+    } else if (action.kind === "scroll") scrolled = true;
+    else if (action.kind === "drag") drags.add(action.direction);
   }
   const counted = (word: string, count: number) => (count > 1 ? `${word} ×${count}` : word);
   return [
     marks > 0 ? counted("marked", marks) : null,
     clicks > 0 ? counted("clicked", clicks) : null,
+    pointed > 0 ? counted("pointed", pointed) : null,
     ...[...drags].map((direction) => `dragged ${direction}`),
     scrolled ? "scrolled" : null,
   ]
@@ -295,6 +324,6 @@ const describeActions = (actions: ReadonlyArray<NarrationAction>) => {
 export function formatNarrationLine(line: NarrationLine, index: number): string {
   const head = `- #${index + 1} (${formatClock(line.frameT)})`;
   const actions = describeActions(line.actions);
-  if (line.text === "") return `${head} ${actions}`.trimEnd();
+  if (line.text === "") return `${head} ${actions === "" ? "screen changed" : actions}`;
   return `${head}${actions === "" ? "" : ` [${actions}]`} “${line.text}”`;
 }
