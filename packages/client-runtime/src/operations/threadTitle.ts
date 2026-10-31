@@ -3,6 +3,8 @@ import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitation
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { truncate } from "@t3tools/shared/String";
 
+import { DICTATION_MARKER } from "../voice-input/dictationMarker.ts";
+
 export interface ThreadTitleSeedInput {
   readonly text: string;
   readonly attachments: ReadonlyArray<Pick<ChatAttachment, "type" | "name">>;
@@ -15,7 +17,8 @@ function normalizeTitleSeed(value: string): string {
 
 export function threadTitleTextFromPrompt(value: string): string {
   const imageIds = new Set<string>();
-  const prose = replaceComposerContextReferences(value, (reference) => {
+  const unmarked = value.replace(`${DICTATION_MARKER} `, "");
+  const prose = replaceComposerContextReferences(unmarked, (reference) => {
     if (reference.kind === "image") {
       imageIds.add(reference.contextId);
       return "";

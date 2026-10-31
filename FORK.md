@@ -110,6 +110,8 @@ shift-click, or ending with the word "Reinschrift") to get a structured prompt, 
 cancel a recording or to insert the plain transcript while it is being rewritten. Both keys
 can be rebound in Settings → Keybindings ("Composer: Dictate").
 
+- Dictated text starts with `[STT]`, once per prompt, so you and agents can tell it was spoken.
+  Thread titles leave it out. The iPhone dictation does the same; the t3-voice app does not.
 - The flag under the mic button is the spoken language; the arrows beside it switch it
   (German, English, French, Spanish, Italian, Dutch, Polish). The choice is kept per client.
 - The desktop app transcribes on its own computer, also for threads on a remote environment

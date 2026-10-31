@@ -1,5 +1,6 @@
 import { replaceTextRange } from "@t3tools/shared/composerTrigger";
 
+import { markDictatedText } from "./dictationMarker.ts";
 import type { PreparedVoiceTranscription, VoiceTranscriber } from "./transcription.ts";
 
 export const VOICE_RECORDING_LIMIT_SECONDS = 5 * 60;
@@ -81,10 +82,11 @@ export function resolveTranscriptCommit(
     return { kind: "stale" };
   }
 
-  const replacement = transcript.trim();
-  if (replacement.length === 0) {
+  const trimmedTranscript = transcript.trim();
+  if (trimmedTranscript.length === 0) {
     return { kind: "empty" };
   }
+  const replacement = markDictatedText(captured.text, trimmedTranscript);
 
   const isEmptySelection = captured.selection.start === captured.selection.end;
   const normalizedLocale = locale.replaceAll("_", "-").toLowerCase();
