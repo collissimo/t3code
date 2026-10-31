@@ -17,6 +17,7 @@ import {
   type TimedWord,
 } from "./narration";
 import { withoutInkChanges } from "./sceneChanges";
+import { windowChanges } from "./windowChanges";
 
 const SHEET_LONG_EDGE = 1600;
 const SHEET_GUTTER = 6;
@@ -63,7 +64,14 @@ const manifestStroke = (stroke: ScrawlStroke, width: number, height: number) => 
       count > 1 ? Math.round((span * index) / (count - 1)) : 0,
     );
   }
-  return { t0: stroke.t0, t1: stroke.t1, fw: width, fh: height, pts };
+  return {
+    t0: stroke.t0,
+    t1: stroke.t1,
+    fw: width,
+    fh: height,
+    pts,
+    ...(stroke.on === undefined ? {} : { on: stroke.on }),
+  };
 };
 
 const KEYFRAME_REASONS: Record<NarrationLine["actions"][number]["kind"], string> = {
@@ -72,6 +80,7 @@ const KEYFRAME_REASONS: Record<NarrationLine["actions"][number]["kind"], string>
   drag: "click",
   scene: "scene_change",
   scroll: "scene_change",
+  note: "scene_change",
 };
 
 export interface BuiltBundle {
@@ -79,6 +88,18 @@ export interface BuiltBundle {
   readonly contactSheet: Blob;
   readonly lines: ReadonlyArray<NarrationLine>;
 }
+
+// Scrawl's time-only marker: no ink, the whole screen, and always a keyframe of its own.
+const flagsToMarks = (flags: ReadonlyArray<number>): Array<ManifestMark> =>
+  flags.map((t, index) => ({
+    id: `f${index + 1}`,
+    t0: t,
+    t1: t,
+    strokes: [],
+    boxNorm: [0, 0, 1, 1],
+    shape: "flag",
+    description: "flagged this moment",
+  }));
 
 const strokesToMarks = (strokes: ReadonlyArray<ScrawlStroke>): Array<ManifestMark> => {
   const groups: Array<{ t0: number; t1: number; strokes: Array<number> }> = [];
@@ -97,9 +118,11 @@ const strokesToMarks = (strokes: ReadonlyArray<ScrawlStroke>): Array<ManifestMar
     for (const strokeIndex of group.strokes) {
       strokes[strokeIndex]!.points.forEach((value, at) => (at % 2 === 0 ? xs : ys).push(value));
     }
+    const on = group.strokes.map((strokeIndex) => strokes[strokeIndex]!.on).find(Boolean);
     return {
       id: `m${index + 1}`,
       ...group,
+      ...(on === undefined ? {} : { on }),
       boxNorm: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
       shape: "mark",
       description: `marked (${group.strokes.length} ${group.strokes.length === 1 ? "stroke" : "strokes"})`,
@@ -108,7 +131,7 @@ const strokesToMarks = (strokes: ReadonlyArray<ScrawlStroke>): Array<ManifestMar
 };
 
 /** Everything the hand touched, padded, or null when that is most of the screen anyway. */
-function activityBox(recording: Pick<CaptureRecording, "input">): {
+function activityBox(recording: { readonly input: Pick<ScrawlStopResult, "events" | "strokes"> }): {
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -120,7 +143,7 @@ function activityBox(recording: Pick<CaptureRecording, "input">): {
     if (event.kind === "click") {
       xs.push(event.x);
       ys.push(event.y);
-    } else {
+    } else if (event.kind === "drag") {
       xs.push(event.x0, event.x1);
       ys.push(event.y0, event.y1);
     }
@@ -257,13 +280,14 @@ const formatDuration = (ms: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
-const summaryText = (
+export const summaryText = (
   recording: Pick<CaptureRecording, "session" | "durationMs">,
   lines: ReadonlyArray<NarrationLine>,
   cropped: boolean,
 ) => {
-  const { app, windowTitle, bundlePath } = recording.session;
-  const source = [app, windowTitle ? `“${windowTitle}”` : ""].filter(Boolean).join(" ") || "Screen";
+  const { app, bundlePath } = recording.session;
+  // The title stays in scrawl.json: a window's title can hold anything.
+  const source = app || "Screen";
   return [
     `[scrawl ${formatDuration(recording.durationMs)} · ${source} · ${bundlePath}]`,
     "Open contact-sheet.png and frames/ in that folder before changing anything: the marks and words only make sense on the images, which can show more than the text does.",
@@ -278,19 +302,23 @@ export async function buildBundle(
 ): Promise<BuiltBundle> {
   const shift = (t: number) => Math.max(0, t - recording.inputOffsetMs);
   const events = recording.input.events.map((event) =>
-    event.kind === "click"
-      ? { ...event, t: shift(event.t) }
-      : { ...event, t: shift(event.t), t1: shift(event.t1) },
+    event.kind === "drag"
+      ? { ...event, t: shift(event.t), t1: shift(event.t1) }
+      : { ...event, t: shift(event.t) },
   );
+  const windows = recording.input.windows.map((snapshot) => ({
+    ...snapshot,
+    t: shift(snapshot.t),
+  }));
   const strokes = recording.input.strokes.map((stroke) => ({
     ...stroke,
     t0: shift(stroke.t0),
     t1: shift(stroke.t1),
   }));
-  const marks = strokesToMarks(strokes);
+  const marks = [...strokesToMarks(strokes), ...flagsToMarks(recording.input.flags.map(shift))];
   const lines = buildNarration({
     words: recording.words,
-    events,
+    events: [...events, ...windowChanges(windows)],
     marks,
     durationMs: recording.durationMs,
     sceneChanges: withoutInkChanges(recording.sceneChanges, strokes, SCRAWL_INK_HOLD_MS),
@@ -370,13 +398,16 @@ export async function buildBundle(
     marks,
     events: events.map((event) => (event.kind === "click" ? { ...event, button: "left" } : event)),
     keyframes: lines.map((line, index) => {
-      const main = line.actions.find((action) => action.kind === "mark") ?? line.actions.at(-1);
+      const main =
+        line.actions.find((action) => action.kind === "mark") ??
+        line.actions.findLast((action) => action.kind !== "note");
       return {
         index: index + 1,
         t: Math.round(line.frameT),
         reason: main === undefined ? "speech" : KEYFRAME_REASONS[main.kind],
         file: `frames/frame-${String(index + 1).padStart(2, "0")}.png`,
         event: main?.kind ?? "speech",
+        ...(main?.kind === "mark" ? { markId: main.id } : {}),
         said: line.text,
       };
     }),
@@ -384,8 +415,8 @@ export async function buildBundle(
     video: recording.videoName,
     videoOffsetMs: recording.videoOffsetMs,
     audio: "audio.wav",
-    windows: [],
-    cursor: [],
+    windows,
+    cursor: recording.input.cursor.map(([t, x, y]) => [shift(t), x, y]),
     ...(box === null
       ? {}
       : {

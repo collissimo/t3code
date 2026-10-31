@@ -27,7 +27,18 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { loadWindowsForegroundApi } from "../electron/WindowsForeground.ts";
 import { activeWindow } from "../snapShot/ActiveWindow.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
-import { ScrawlInputTracker } from "./inputTracker.ts";
+import {
+  mergeCaptureInput,
+  pointerLookupKey,
+  ScrawlContextLog,
+  strokeLookupKey,
+  strokeLookupPoint,
+} from "./contextLog.ts";
+import { startElementLookups, type ElementHit, type ElementLookups } from "./elementLookup.ts";
+import { ScrawlInputTracker, type CursorPoint } from "./inputTracker.ts";
+import { startScrawlContextProcess, type ScrawlContextProcess } from "./scrawlContextProcess.ts";
+import { loadWindowAtPoint } from "./windowAtPoint.ts";
+import { taskbarStrip } from "./windowList.ts";
 
 const DEFAULT_SHORTCUT = "Alt+Shift+S";
 // Another program (the Scrawl app uses the same keys) may hold the shortcut and let go of it later.
@@ -37,6 +48,8 @@ const SHORTCUT_RETRY_MS = 15_000;
 const INPUT_POLL_MS = 10;
 const VK_LBUTTON = 0x01;
 const VK_SHIFT = 0x10;
+const FLAG_SHORTCUT = "Alt+Shift+F";
+const LOOKUP_DRAIN_MS = 400;
 // Like Scrawl: frames, text and contact sheet stay, the heavy media goes.
 const MEDIA_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
 const MEDIA_FILES = ["recording.mp4", "recording.webm", "audio.wav"];
@@ -115,6 +128,11 @@ interface RunningCapture {
   readonly bundlePath: string;
   readonly startedAtMs: number;
   readonly tracker: ScrawlInputTracker;
+  readonly context: ScrawlContextLog;
+  readonly watcher: ScrawlContextProcess | null;
+  readonly lookups: ElementLookups | null;
+  readonly flagShortcut: boolean;
+  readonly windowTitle: string;
   readonly display: Electron.Display;
   readonly ink: Electron.BrowserWindow;
   readonly pill: Electron.BrowserWindow;
@@ -137,8 +155,11 @@ const make = Effect.gen(function* () {
     if (!capture.ink.isDestroyed()) void capture.ink.webContents.executeJavaScript(script, true);
   };
 
-  /** Clicks and strokes need Windows' key state; elsewhere a capture has voice and video only. */
-  const startInputPoll = (isKeyDown: ((virtualKey: number) => boolean) | null) => {
+  /** Clicks and strokes need Windows' key state; elsewhere a capture has voice, video and cursor. */
+  const startInputPoll = (
+    isKeyDown: ((virtualKey: number) => boolean) | null,
+    lookAt: (capture: RunningCapture, key: string, at: CursorPoint) => void,
+  ) => {
     let left = false;
     let shift = false;
     return setInterval(() => {
@@ -149,7 +170,11 @@ const make = Effect.gen(function* () {
       if (isKeyDown !== null) {
         const nextLeft = isKeyDown(VK_LBUTTON);
         const nextShift = isKeyDown(VK_SHIFT);
-        if (nextLeft && !left) current.tracker.leftDown(t, at);
+        if (nextLeft && !left) {
+          current.tracker.leftDown(t, at);
+          current.watcher?.requestSnapshot();
+          lookAt(current, pointerLookupKey(t), at);
+        }
         if (!nextLeft && left) current.tracker.leftUp(t, at);
         if (nextShift && !shift) {
           current.tracker.shiftDown(t, at);
@@ -157,7 +182,11 @@ const make = Effect.gen(function* () {
           current.inkTimer = null;
         }
         if (!nextShift && shift) {
-          current.tracker.shiftUp();
+          if (current.tracker.shiftUp()) {
+            const stroke = current.tracker.result().strokes.at(-1)!;
+            const point = strokeLookupPoint(stroke, current.display.bounds);
+            lookAt(current, strokeLookupKey(stroke.t0), point);
+          }
           ink(current, "inkLift()");
           // Fades on a clock, not on the next click, so a click's effect on the screen stays its own.
           current.inkTimer = setTimeout(() => ink(current, "inkClear()"), SCRAWL_INK_HOLD_MS);
@@ -165,6 +194,7 @@ const make = Effect.gen(function* () {
         left = nextLeft;
         shift = nextShift;
       }
+      current.context.cursor(t, at);
       const point = current.tracker.moved(t, at);
       if (point !== null) {
         ink(
@@ -210,6 +240,13 @@ const make = Effect.gen(function* () {
       catch: toError,
     });
     const tracker = new ScrawlInputTracker(display.bounds);
+    const context = new ScrawlContextLog(display.bounds);
+    const windowAtPoint =
+      keys === null
+        ? null
+        : yield* Effect.tryPromise({ try: () => loadWindowAtPoint(), catch: toError }).pipe(
+            Effect.orElseSucceed(() => null),
+          );
 
     const inkWindow = new Electron.BrowserWindow(overlayOptions(display.bounds));
     inkWindow.setIgnoreMouseEvents(true);
@@ -234,15 +271,71 @@ const make = Effect.gen(function* () {
     void pill.loadURL(dataUrl(PILL_PAGE));
     pill.showInactive();
 
+    const nativeId = (window: Electron.BrowserWindow) =>
+      Number(window.getNativeWindowHandle().readBigUInt64LE() & 0xffff_ffffn);
+    const relative = (at: number) => at - startedAtMs;
+    const watcher =
+      keys === null
+        ? null
+        : startScrawlContextProcess(
+            NodePath.join(__dirname, "scrawl", "ScrawlContextWorker.cjs"),
+            {
+              frame: Electron.screen.dipToScreenRect(null, display.bounds),
+              dock: taskbarStrip(
+                Electron.screen.dipToScreenRect(null, display.bounds),
+                Electron.screen.dipToScreenRect(null, display.workArea),
+              ),
+              ignoredWindowIds: [nativeId(inkWindow), nativeId(pill)],
+            },
+            (message) => {
+              if (message.type === "wheel") {
+                const at = Electron.screen.getCursorScreenPoint();
+                context.scrolled(relative(message.at), at, message.dx, message.dy);
+              } else if (message.type === "chord") {
+                context.pressed(relative(message.at), message.shortcut);
+              } else if (message.type === "app") {
+                context.switchedTo(relative(message.at), message.app);
+              } else if (message.type === "windows") {
+                context.windows({ t: relative(message.at), windows: message.windows });
+              }
+            },
+          );
+    const lookups = keys === null ? null : startElementLookups();
+    const flagShortcut = Electron.globalShortcut.register(FLAG_SHORTCUT, () => {
+      const current = running;
+      if (current === null) return;
+      current.context.flagged(Date.now() - current.startedAtMs);
+      if (!current.pill.isDestroyed()) {
+        void current.pill.webContents.executeJavaScript('setClock("⚑")', true);
+      }
+    });
+    const lookAt = (current: RunningCapture, key: string, at: CursorPoint) => {
+      const { x, y, width, height } = current.display.bounds;
+      if (at.x < x || at.y < y || at.x >= x + width || at.y >= y + height) return;
+      if (keys === null || windowAtPoint === null) return;
+      const point = Electron.screen.dipToScreenPoint(at);
+      // Asking about our own window would turn on this renderer's accessibility tree.
+      const window = windowAtPoint(point.x, point.y);
+      if (window === 0n || keys.getWindowThreadAndProcessId(window).processId === process.pid) {
+        return;
+      }
+      current.lookups?.look(key, point.x, point.y);
+    };
+
     const capture: RunningCapture = {
       id,
       bundlePath,
       startedAtMs,
       tracker,
+      context,
+      watcher,
+      lookups,
+      flagShortcut,
+      windowTitle: front?.title ?? "",
       display,
       ink: inkWindow,
       pill,
-      inputTimer: startInputPoll(keys === null ? null : keys.isKeyDown),
+      inputTimer: startInputPoll(keys === null ? null : keys.isKeyDown, lookAt),
       inkTimer: null,
       clockTimer: setInterval(() => {
         const current = running;
@@ -267,7 +360,12 @@ const make = Effect.gen(function* () {
     } satisfies ScrawlStartResult;
   });
 
-  const tearDown = (capture: RunningCapture) => {
+  const tearDown = (capture: RunningCapture, keepHelpers = false) => {
+    if (!keepHelpers) {
+      capture.watcher?.kill();
+      void capture.lookups?.finish(0);
+    }
+    if (capture.flagShortcut) Electron.globalShortcut.unregister(FLAG_SHORTCUT);
     clearInterval(capture.inputTimer);
     if (capture.inkTimer !== null) clearTimeout(capture.inkTimer);
     clearInterval(capture.clockTimer);
@@ -282,9 +380,16 @@ const make = Effect.gen(function* () {
     }
     const capture = running;
     capture.tracker.shiftUp();
-    tearDown(capture);
-    const { events, strokes } = capture.tracker.result();
-    return { events: [...events], strokes: [...strokes] };
+    tearDown(capture, true);
+    const [hits] = yield* Effect.promise(() =>
+      Promise.all([
+        capture.lookups?.finish(LOOKUP_DRAIN_MS) ?? new Map<string, ElementHit>(),
+        capture.watcher?.stop(),
+      ]),
+    );
+    return mergeCaptureInput(capture.tracker.result(), capture.context.result(), hits, [
+      capture.windowTitle,
+    ]);
   });
 
   const cancel = Effect.fn("DesktopScrawl.cancel")(function* (input: ScrawlCaptureRef) {
