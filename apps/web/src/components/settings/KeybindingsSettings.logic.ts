@@ -376,6 +376,7 @@ export function commandLabel(command: KeybindingCommand): string {
   if (command === "composer.dictate") return "Composer: Dictate";
   if (command === "composer.dictateStructured") return "Composer: Dictate as Structured Prompt";
   if (command === "composer.dictationHistory") return "Composer: Dictation History";
+  if (command === "scrawl.history") return "Past Screen Captures";
   if (command === "thread.steerQueuedMessage") return "Queue: Send First Queued Message";
   if (command === "thread.editQueuedMessage") return "Queue: Edit Last Queued Message";
   if (command === "thread.copyReference") return "Pull Request: Copy Link or Thread";

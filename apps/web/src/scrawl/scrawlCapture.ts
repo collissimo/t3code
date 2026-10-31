@@ -6,13 +6,29 @@ import type { DesktopBridge, ScrawlStartResult } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import { startMicrophoneCapture, type MicrophoneCapture } from "../dictation/microphoneCapture";
+import { toastManager } from "../components/ui/toast";
 import { DEFAULT_DICTATION_LANGUAGE } from "../dictation/dictationLanguages";
 import { DICTATION_LANGUAGE_KEY } from "../dictation/useDictation";
 import { getLocalStorageItem } from "../hooks/useLocalStorage";
 import { randomUUID } from "../lib/utils";
 import { wordsOrWhole } from "./narration";
 import { buildBundle } from "./scrawlBundle";
-import { findSceneChanges, THUMB_HEIGHT, THUMB_WIDTH, type LumaSample } from "./sceneChanges";
+import { readCaptureFile, readOptionalCaptureFile } from "./scrawlFiles";
+import {
+  claimBuild,
+  encodeWav,
+  releaseBuild,
+  SCRAWL_AUDIO_FILE,
+  SCRAWL_TIMING_FILE,
+  type ScrawlTiming,
+} from "./scrawlHistory";
+import {
+  findSceneChanges,
+  lumaOf,
+  THUMB_HEIGHT,
+  THUMB_WIDTH,
+  type LumaSample,
+} from "./sceneChanges";
 
 const SEND_INTERVAL_MS = 500;
 const SAMPLE_INTERVAL_MS = 750;
@@ -45,9 +61,7 @@ interface Running {
   readonly mic: MicrophoneCapture;
   readonly recorder: MediaRecorder;
   readonly videoName: string;
-  readonly chunks: Array<Blob>;
   readonly samples: Array<LumaSample>;
-  readonly pcm: Array<string>;
   readonly micStartedAt: number;
   readonly language: string;
   readonly pcmTimer: ReturnType<typeof setInterval>;
@@ -70,9 +84,11 @@ const setState = (next: ScrawlState) => {
   for (const listener of listeners) listener();
 };
 
-const notify = (notice: NonNullable<ScrawlState["notice"]>) => {
+const notify = (notice: NonNullable<ScrawlState["notice"]>, phase: ScrawlPhase = "idle") => {
   if (noticeTimer !== null) clearTimeout(noticeTimer);
-  setState({ phase: "idle", notice });
+  setState({ phase, notice });
+  // Notices show above the composer; Settings has none, and the word must still reach the user.
+  if (delivery === null) toastManager.add({ type: notice.tone, title: notice.text });
   noticeTimer = setTimeout(() => {
     noticeTimer = null;
     if (state.notice === notice) setState({ ...state, notice: null });
@@ -99,6 +115,8 @@ const scrawlBridge = (): DesktopBridge | null =>
   window.desktopBridge?.scrawlStart === undefined ? null : window.desktopBridge;
 
 export const isScrawlAvailable = () => scrawlBridge() !== null;
+
+export const hasScrawlComposer = () => delivery !== null;
 
 const openScreen = (sourceId: string) =>
   navigator.mediaDevices.getUserMedia({
@@ -135,14 +153,7 @@ const startSampling = (track: MediaStreamTrack, startedAt: number, samples: Arra
         context.drawImage(frame, 0, 0, THUMB_WIDTH, THUMB_HEIGHT);
         frame.close();
         const { data } = context.getImageData(0, 0, THUMB_WIDTH, THUMB_HEIGHT);
-        const luma = new Float32Array(THUMB_WIDTH * THUMB_HEIGHT);
-        for (let index = 0; index < luma.length; index++) {
-          const offset = index * 4;
-          luma[index] =
-            (0.2126 * data[offset]! + 0.7152 * data[offset + 1]! + 0.0722 * data[offset + 2]!) /
-            255;
-        }
-        samples.push({ t, luma });
+        samples.push({ t, luma: lumaOf(data) });
       })
       // A frame missed while the track starts or ends only thins the samples.
       .catch(() => undefined)
@@ -159,38 +170,20 @@ const decodeBase64 = (value: string) => {
   return bytes;
 };
 
-/** 16 kHz mono 16-bit, as the dictation pipeline records it. */
-const encodeWav = (pieces: ReadonlyArray<Uint8Array>) => {
-  const length = pieces.reduce((sum, piece) => sum + piece.length, 0);
-  const wav = new Uint8Array(44 + length);
-  const view = new DataView(wav.buffer);
-  const ascii = (offset: number, text: string) => {
-    for (let index = 0; index < text.length; index++) {
-      view.setUint8(offset + index, text.charCodeAt(index));
-    }
-  };
-  ascii(0, "RIFF");
-  view.setUint32(4, 36 + length, true);
-  ascii(8, "WAVEfmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, 16_000, true);
-  view.setUint32(28, 32_000, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  ascii(36, "data");
-  view.setUint32(40, length, true);
-  let offset = 44;
-  for (const piece of pieces) {
-    wav.set(piece, offset);
-    offset += piece.length;
-  }
-  return wav;
+/** Everything recorded goes to disk as it comes: a crash keeps it, and memory stays flat. */
+const appendToDisk = (
+  bridge: DesktopBridge,
+  capture: Running,
+  name: string,
+  bytes: () => Promise<Uint8Array> | Uint8Array,
+) => {
+  capture.writes = capture.writes.then(async () => {
+    await bridge.scrawlAppendVideo?.({ id: capture.session.id, name, bytes: await bytes() });
+  });
 };
 
 const sendPcm = (bridge: DesktopBridge, capture: Running, pcm: string) => {
-  capture.pcm.push(pcm);
+  appendToDisk(bridge, capture, SCRAWL_AUDIO_FILE, () => decodeBase64(pcm));
   capture.sending = capture.sending.then(async () => {
     // The recording goes on without words when the speech model is missing; the end says so.
     await bridge
@@ -222,9 +215,7 @@ const start = async (bridge: DesktopBridge) => {
       mic,
       recorder,
       videoName: format.name,
-      chunks: [],
       samples,
-      pcm: [],
       micStartedAt,
       language:
         getLocalStorageItem(DICTATION_LANGUAGE_KEY, Schema.String) ?? DEFAULT_DICTATION_LANGUAGE,
@@ -238,18 +229,29 @@ const start = async (bridge: DesktopBridge) => {
     };
     recorder.onstart = () => {
       capture.videoStartedAt = Date.now();
+      const timing: ScrawlTiming = {
+        micStartedAtMs: capture.micStartedAt,
+        videoStartedAtMs: capture.videoStartedAt,
+        language: capture.language,
+        sessionId: capture.sessionId,
+      };
+      void bridge
+        .scrawlWriteFile?.({
+          id: capture.session.id,
+          path: SCRAWL_TIMING_FILE,
+          bytes: new TextEncoder().encode(JSON.stringify(timing)),
+        })
+        // A rebuild without it estimates the offset from the lengths of video and audio.
+        .catch(() => undefined);
     };
     recorder.ondataavailable = (event) => {
       if (event.data.size === 0) return;
-      capture.chunks.push(event.data);
-      // Written as it comes, so a crash keeps the video recorded so far.
-      capture.writes = capture.writes.then(async () => {
-        await bridge.scrawlAppendVideo?.({
-          id: capture.session.id,
-          name: capture.videoName,
-          bytes: new Uint8Array(await event.data.arrayBuffer()),
-        });
-      });
+      appendToDisk(
+        bridge,
+        capture,
+        capture.videoName,
+        async () => new Uint8Array(await event.data.arrayBuffer()),
+      );
     };
     recorder.start(VIDEO_TIMESLICE_MS);
     running = capture;
@@ -282,19 +284,27 @@ const stopRecorder = (recorder: MediaRecorder) =>
     recorder.stop();
   });
 
-const deliver = async (text: string, contactSheet: Blob, bundlePath: string) => {
+const deliver = async (
+  text: string,
+  contactSheet: Blob,
+  bundlePath: string,
+  phase: ScrawlPhase = "idle",
+) => {
   if (delivery === null || !delivery.insert(`${text}\n`)) {
     // The clipboard refuses a window that is not in front, and this one usually is not.
     const copied = await navigator.clipboard?.writeText(text).then(
       () => true,
       () => false,
     );
-    notify({
-      text: copied
-        ? "No composer can take the capture · its text is on the clipboard"
-        : `No composer can take the capture · it is saved in ${bundlePath}`,
-      tone: "warning",
-    });
+    notify(
+      {
+        text: copied
+          ? "No composer can take the capture · its text is on the clipboard"
+          : `No composer can take the capture · it is saved in ${bundlePath}`,
+        tone: "warning",
+      },
+      phase,
+    );
     return;
   }
   const attached = await delivery.attachImage(
@@ -304,12 +314,29 @@ const deliver = async (text: string, contactSheet: Blob, bundlePath: string) => 
     attached
       ? { text: "Capture added to the composer", tone: "success" }
       : { text: "Capture text added · the contact sheet could not be attached", tone: "warning" },
+    phase,
   );
+};
+
+/** Puts a past capture into the composer on screen, as if it had just finished. */
+export const insertPastCapture = async (id: string, bundlePath: string) => {
+  const read = scrawlBridge()?.scrawlReadFile;
+  if (read === undefined) return;
+  // Never ends a capture in progress: this is not the end of the one being recorded.
+  const phase = state.phase;
+  try {
+    const text = await (await readCaptureFile(read, id, "summary.md")).text();
+    const sheet = await readCaptureFile(read, id, "contact-sheet.png", "image/png");
+    await deliver(text.trimEnd(), sheet, bundlePath, phase);
+  } catch (error) {
+    notify({ text: `The capture could not be read: ${describe(error)}`, tone: "error" }, phase);
+  }
 };
 
 const finish = async (bridge: DesktopBridge, capture: Running) => {
   running = null;
   setState({ phase: "building", notice: null });
+  claimBuild(capture.session.id);
   try {
     const input = await bridge.scrawlStop!({ id: capture.session.id });
     const durationMs = Date.now() - capture.micStartedAt;
@@ -318,6 +345,9 @@ const finish = async (bridge: DesktopBridge, capture: Running) => {
     release(capture);
     await capture.sending;
     await capture.writes;
+    const read = bridge.scrawlReadFile!;
+    const { id } = capture.session;
+    const pcm = await readOptionalCaptureFile(read, id, SCRAWL_AUDIO_FILE);
     const transcript = await bridge.dictationFinish?.({
       sessionId: capture.sessionId,
       words: true,
@@ -335,16 +365,18 @@ const finish = async (bridge: DesktopBridge, capture: Running) => {
         words,
         transcriptText,
         model: "parakeet",
-        video: new Blob(capture.chunks, { type: capture.recorder.mimeType }),
+        // Only now, for as long as the build runs; nothing of it stayed around during the capture.
+        video: await readCaptureFile(read, id, capture.videoName, capture.recorder.mimeType),
         videoName: capture.videoName,
         videoOffsetMs: capture.videoStartedAt - capture.micStartedAt,
         inputOffsetMs: capture.micStartedAt - capture.session.startedAtMs,
         durationMs,
         sceneChanges: findSceneChanges(capture.samples),
-        wav: encodeWav(capture.pcm.map(decodeBase64)),
+        wav: encodeWav(new Uint8Array((await pcm?.arrayBuffer()) ?? new ArrayBuffer(0))),
       },
       (path, bytes) => bridge.scrawlWriteFile!({ id: capture.session.id, path, bytes }),
     );
+    await bridge.scrawlMarkBuilt?.({ id: capture.session.id }).catch(() => undefined);
     await deliver(built.text, built.contactSheet, capture.session.bundlePath);
     if (transcript !== undefined && !transcript.ok) {
       notify({ text: `Capture has no transcript: ${transcript.reason}`, tone: "warning" });
@@ -352,9 +384,11 @@ const finish = async (bridge: DesktopBridge, capture: Running) => {
   } catch (error) {
     release(capture);
     notify({
-      text: `The capture could not be built: ${describe(error)}. Its video is in ${capture.session.bundlePath}`,
+      text: `The capture could not be built: ${describe(error)}. Rebuild it from Past captures`,
       tone: "error",
     });
+  } finally {
+    releaseBuild(capture.session.id);
   }
 };
 

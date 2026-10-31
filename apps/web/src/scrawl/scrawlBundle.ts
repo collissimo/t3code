@@ -146,7 +146,7 @@ function activityBox(recording: Pick<CaptureRecording, "input">): {
   return width * height > MAX_CROP_AREA ? null : { x, y, width, height };
 }
 
-const seekTo = (video: HTMLVideoElement, seconds: number) =>
+export const seekTo = (video: HTMLVideoElement, seconds: number) =>
   new Promise<void>((resolve, reject) => {
     const onSeeked = () => {
       video.removeEventListener("seeked", onSeeked);
@@ -163,7 +163,7 @@ const seekTo = (video: HTMLVideoElement, seconds: number) =>
     video.currentTime = seconds;
   });
 
-const loadVideo = async (blob: Blob) => {
+export const loadVideo = async (blob: Blob) => {
   const video = document.createElement("video");
   video.muted = true;
   video.preload = "auto";

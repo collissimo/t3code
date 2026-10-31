@@ -22,12 +22,23 @@ import type {
 import type {
   ScrawlAppendVideoInput,
   ScrawlCaptureRef,
+  ScrawlCaptureSummary,
+  ScrawlReadFileInput,
+  ScrawlSetPinnedInput,
+  ScrawlShortcutAvailability,
+  ScrawlShortcutState,
   ScrawlStartResult,
   ScrawlStopResult,
+  ScrawlUnfinished,
   ScrawlWriteFileInput,
 } from "./scrawl.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
+import {
+  type ClientSettings,
+  type QuitConfirmationMode,
+  type SnapShotKeyChord,
+  SnapShotShortcut,
+} from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
 
@@ -1064,6 +1075,18 @@ export interface DesktopBridge {
   scrawlCancel?: (input: ScrawlCaptureRef) => Promise<void>;
   scrawlAppendVideo?: (input: ScrawlAppendVideoInput) => Promise<void>;
   scrawlWriteFile?: (input: ScrawlWriteFileInput) => Promise<void>;
+  scrawlReadFile?: (input: ScrawlReadFileInput) => Promise<Uint8Array>;
+  /** Frees what a lost renderer left running and lists the captures to rebuild on their own. */
+  scrawlListUnfinished?: () => Promise<ReadonlyArray<ScrawlUnfinished>>;
+  /** Marks one try, so a rebuild that crashes the app is not repeated at every launch. */
+  scrawlBeginRebuild?: (input: ScrawlCaptureRef) => Promise<ScrawlUnfinished>;
+  scrawlMarkBuilt?: (input: ScrawlCaptureRef) => Promise<void>;
+  scrawlListCaptures?: () => Promise<ReadonlyArray<ScrawlCaptureSummary>>;
+  scrawlSetPinned?: (input: ScrawlSetPinnedInput) => Promise<void>;
+  scrawlTrash?: (input: ScrawlCaptureRef) => Promise<void>;
+  scrawlReveal?: (input: ScrawlCaptureRef) => Promise<void>;
+  scrawlGetShortcutState?: () => Promise<ScrawlShortcutState>;
+  scrawlCheckShortcut?: (shortcut: SnapShotKeyChord) => Promise<ScrawlShortcutAvailability>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;

@@ -160,8 +160,9 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 
 - Desktop app only: a browser cannot see the whole screen, and mobile has no such thing. Clicks and
   ink need Windows; elsewhere a capture has voice and video.
-- While the Scrawl app runs it holds Alt+Shift+S. T3 Code logs that and takes the shortcut within
-  15 seconds of Scrawl closing. The composer button works either way.
+- While the Scrawl app runs it holds Alt+Shift+S. Settings > SnapShots > Screen capture says so,
+  and T3 Code takes the shortcut within 15 seconds of Scrawl closing. The composer button and the
+  command palette work either way. Rebind it in the same place.
 - Speech and pointing do not run in step, so sentences are never cut at a click: whole sentences
   own a keyframe, click bursts fold into one (`clicked ×3`), and clicks the screen did not answer
   read as `pointed`. On 32 real captures this took cuts through sentences from 59 of 127 lines to 1.
@@ -169,5 +170,13 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 - The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
   not keep it out on Windows 10 22H2.
 - Bundles are in `<T3 home>/scrawl/captures` in Scrawl's format, so the Scrawl skill and the
-  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them. Video and audio are deleted after 7 days.
+  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them.
+- Video and audio go to disk as they are recorded and stay out of memory until the build, which reads
+  them back. A crash or reload during a capture loses at most the last seconds: the next launch
+  rebuilds it once from `unfinished.json`, `timing.json`, `audio.pcm` and the video. A capture that
+  fails is kept and offers a manual rebuild. Scene changes come from sampling the video again.
+- Past captures (Alt+Shift+H, palette, Settings) find, insert, pin, or bin a capture and show the
+  date retention acts on. Same presets and `.pinned` marker as Scrawl: by default video goes to the
+  Recycle Bin after 7 days and the capture after 30. The list and the hourly pass share one plan
+  (`apps/desktop/src/scrawl/captureStore.ts`), so the dates shown are what happens.
 - Code: `apps/desktop/src/scrawl/`, `apps/web/src/scrawl/`, `packages/contracts/src/scrawl.ts`.
