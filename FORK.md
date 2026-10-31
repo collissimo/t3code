@@ -173,6 +173,13 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
   43 captures all 124 ink marks get the shape and box of Scrawl's current `sketch.rs`. Scrawl compares
   the screen around the ink, but here the video shows the ink, so scene changes decide "same screen".
   The laser and pins are not here: Scrawl's Windows build records no laser and Shift+move is the ink.
+- Each keyframe is cropped on its own to what happened around it, with Scrawl's rules and numbers:
+  the input its line names, what a click changed, and edges moved off text
+  (`frames-full/` keeps the whole screen). The contact sheet packs crops of any shape into justified
+  rows, one chip size throughout. Budget: 6 keyframes up to 40 s, one more per 20 s, at most 12;
+  ordinary actions fill only the first 6. A window or cursor log improves the crops when
+  `CaptureRecording` has one. On the 43 real Scrawl captures, given those logs, the crops reproduce
+  Scrawl's own (median overlap 1.00); without them 0.91.
 - Uses the dictation model above, with word times mapped back across the pauses it cuts out.
 - The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
   not keep it out on Windows 10 22H2.

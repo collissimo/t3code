@@ -89,8 +89,9 @@ const SHORT_DRAG = 0.15;
 const ATTACH_MS = 3_000;
 const SETTLE_MS = 300;
 // Scrawl's keyframe budget: each image costs a reading model about 1.5k tokens.
+const BASE_KEYFRAMES = 6;
 export const budgetFor = (durationMs: number) =>
-  Math.min(12, 6 + Math.max(0, Math.ceil((durationMs - 40_000) / 20_000)));
+  Math.min(12, BASE_KEYFRAMES + Math.trunc(Math.max(0, durationMs - 20_000) / 20_000));
 const COVERAGE_MS = 35_000;
 const COVERAGE_WORDS = 100;
 
@@ -248,7 +249,10 @@ const insideMarkGroups = (
   return inside;
 };
 
-/** The sentences that own a keyframe: every mark, then the strongest actions, then long stretches. */
+/**
+ * The sentences that own a keyframe: every mark, then long stretches that show something, then the
+ * strongest actions. Ordinary actions fill only the base budget; the rest is for marks and coverage.
+ */
 const chooseFrameOwners = (
   sentences: ReadonlyArray<Sentence>,
   durationMs: number,
@@ -261,26 +265,36 @@ const chooseFrameOwners = (
     .filter((entry) => entry.score > 0 && !inside.has(entry.index))
     .sort((a, b) => b.score - a.score || a.index - b.index);
   for (const { index, score } of ranked) {
-    if (score >= SCORES.mark || owners.size < budget) owners.add(index);
+    if (score >= SCORES.mark) owners.add(index);
   }
-  if (sentences.length > 0) {
-    let stretchStart = 0;
-    let stretchWords = 0;
-    for (let index = 0; index < sentences.length; index++) {
-      const sentence = sentences[index]!;
-      if (owners.has(index)) {
-        stretchStart = sentence.t0;
-        stretchWords = sentence.words.length;
-        continue;
-      }
-      stretchWords += sentence.words.length;
-      const long = sentence.t1 - stretchStart > COVERAGE_MS || stretchWords > COVERAGE_WORDS;
-      if (long && owners.size < budget && !inside.has(index)) {
-        owners.add(index);
-        stretchStart = sentence.t0;
-        stretchWords = sentence.words.length;
-      }
+  let stretchStart = 0;
+  let stretchWords = 0;
+  let best = -1;
+  for (let index = 0; index < sentences.length; index++) {
+    const sentence = sentences[index]!;
+    if (owners.has(index)) {
+      stretchStart = sentence.t0;
+      stretchWords = sentence.words.length;
+      best = -1;
+      continue;
     }
+    stretchWords += sentence.words.length;
+    // The latest of equals splits the stretch most evenly.
+    const score = scoreOf(sentence);
+    if (score > 0 && !inside.has(index) && score >= (best < 0 ? 0 : scoreOf(sentences[best]!))) {
+      best = index;
+    }
+    const long = sentence.t1 - stretchStart > COVERAGE_MS || stretchWords > COVERAGE_WORDS;
+    if (long && best >= 0 && owners.size < budget) {
+      owners.add(best);
+      stretchStart = sentences[best]!.t0;
+      stretchWords = sentences.slice(best, index + 1).flatMap((s) => s.words).length;
+      best = -1;
+    }
+  }
+  for (const { index } of ranked) {
+    if (owners.size >= Math.min(budget, BASE_KEYFRAMES)) break;
+    owners.add(index);
   }
   // Speech with nothing on screen still gets one frame to be read against.
   if (owners.size === 0 && sentences.length > 0) owners.add(0);

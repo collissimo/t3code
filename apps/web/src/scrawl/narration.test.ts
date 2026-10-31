@@ -185,4 +185,46 @@ describe("buildNarration", () => {
     expect(lines).toHaveLength(9);
     expect(lines[0]!.text).toBe("Erster Satz ohne Aktion. Das hier markiert.");
   });
+
+  const actedSentence = (t: number) => say("Hier klicke ich jetzt.", t, 100);
+
+  it.each([39_999, 40_000, 139_999, 600_000])(
+    "lets ordinary clicks fill only the base budget in %i ms",
+    (durationMs) => {
+      const times = Array.from({ length: 12 }, (_, index) => 500 + index * 3_000);
+      const lines = buildNarration({
+        words: times.flatMap(actedSentence),
+        events: times.map((t) => ({ kind: "click" as const, t: t + 100, x: 0.5, y: 0.5 })),
+        marks: [],
+        durationMs,
+      });
+      expect(lines).toHaveLength(6);
+    },
+  );
+
+  it("spends the budget past the base on long stretches that show something", () => {
+    const early = Array.from({ length: 6 }, (_, index) => 500 + index * 2_000);
+    const late = [50_000, 90_000, 130_000];
+    const lines = buildNarration({
+      words: [...early, ...late].flatMap(actedSentence),
+      events: [...early, ...late].map((t) => ({
+        kind: "click" as const,
+        t: t + 100,
+        x: 0.5,
+        y: 0.5,
+      })),
+      marks: [],
+      durationMs: 140_000,
+    });
+    expect(lines.map((line) => line.t0)).toEqual(expect.arrayContaining(late));
+  });
+
+  it("takes no keyframe for long speech over a screen where nothing happens", () => {
+    const words = Array.from({ length: 6 }, (_, index) =>
+      say("Ich rede hier einfach weiter ohne etwas zu tun.", index * 20_000, 200),
+    ).flat();
+    const lines = buildNarration({ words, events: [], marks: [], durationMs: 120_000 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.text.split(" ")).toHaveLength(words.length);
+  });
 });
