@@ -25,6 +25,14 @@ T3 Code can use your installed Codex and its existing login. Run `codex login`
 on the environment's machine to sign in. [Provider setup](./install.md#providers)
 covers installation and custom configuration.
 
+## Code mode
+
+Turn on **Code mode** for a Codex account in **Settings → Providers**. The model
+then writes one JavaScript program that makes many tool calls and reads only what
+the program prints, which saves tokens on big, repetitive tasks and can cost more
+on small ones. It is an unfinished Codex feature, so it may change with a Codex
+update. New sessions pick up the change.
+
 ## Use multiple accounts
 
 Add another ChatGPT account in **Settings → Providers**, then select the account

@@ -13,6 +13,21 @@ describe("codexAppServerArgs", () => {
   });
 });
 
+describe("codexAppServerArgs code mode", () => {
+  it("enables code mode before launch args, so a user's --disable still wins", () => {
+    NodeAssert.deepStrictEqual(codexAppServerArgs("--disable code_mode", { codeMode: true }), [
+      "app-server",
+      "--enable",
+      "code_mode",
+      "-c",
+      "suppress_unstable_features_warning=true",
+      "--disable",
+      "code_mode",
+    ]);
+    NodeAssert.deepStrictEqual(codexAppServerArgs("", { codeMode: false }), ["app-server"]);
+  });
+});
+
 describe("codexExecLaunchArgs", () => {
   it("keeps shared codex flags and omits app-server-only flags", () => {
     NodeAssert.deepStrictEqual(
