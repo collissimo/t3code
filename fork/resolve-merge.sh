@@ -90,6 +90,26 @@ VP_GIT_HOOKS=0 vp install
 # typecheck. Claude fixes what the typecheck reports, in the files it names. Same apps as the
 # desktop build bundles.
 broken=()
+# The tracked files a typecheck log blames, from the repository root. tsc paths are relative to the
+# app, and the layout depends on the tool and on whether it prints to a terminal:
+# src/x.ts(12,5): error TS... or src/x.ts:12:5 - error TS...
+# A layout nothing here knows must still reach Claude, so any path on an error line counts.
+blamed_files() {
+  local app=$1 log_file=$2 text paths path
+  text=$(sed 's/\x1b\[[0-9;]*m//g' "$log_file")
+  paths=$(grep -oE '^[^ :(]+\.[cm]?tsx?(\([0-9]+,[0-9]+\):|:[0-9]+:[0-9]+ -) error' <<<"$text" |
+    sed -E 's/[(:].*$//' || true)
+  if [[ -z "$paths" ]]; then
+    paths=$(grep -E 'error TS[0-9]+' <<<"$text" | grep -oE '[^ :(]+\.[cm]?tsx?' || true)
+  fi
+  for path in $(sort -u <<<"$paths"); do
+    path=$(realpath -m --relative-to=. "apps/$app/$path")
+    if git ls-files --error-unmatch -- "$path" > /dev/null 2>&1; then
+      echo "$path"
+    fi
+  done
+}
+
 typecheck() {
   local app status=0
   broken=()
@@ -97,10 +117,7 @@ typecheck() {
   for app in server desktop web; do
     if ! (cd "apps/$app" && vp run typecheck) > "$log.$app" 2>&1; then
       status=1
-      # tsc prints paths relative to the app: src/x.ts:12:5 - error TS...
-      mapfile -t -O "${#broken[@]}" broken < <(sed 's/\x1b\[[0-9;]*m//g' "$log.$app" |
-        grep -oE '^[^ :(]+\.[cm]?tsx?:[0-9]+:[0-9]+ - error' |
-        cut -d: -f1 | sort -u | sed "s|^|apps/$app/|")
+      mapfile -t -O "${#broken[@]}" broken < <(blamed_files "$app" "$log.$app")
     fi
     cat "$log.$app" >> "$log"
   done
@@ -149,7 +166,12 @@ if ! typecheck; then
   exit 1
 fi
 
-git add -A -- "${files[@]}" "${fixable[@]}"
+# git rm already staged a deleted conflict file, and git add refuses a path that is gone.
+for file in "${files[@]}" "${fixable[@]}"; do
+  if [[ -e "$file" ]] || git ls-files --error-unmatch -- "$file" > /dev/null 2>&1; then
+    git add -A -- "$file"
+  fi
+done
 if git rev-parse -q --verify MERGE_HEAD > /dev/null; then
   git commit -q --no-edit
 elif ! git diff --cached --quiet; then

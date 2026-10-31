@@ -36,6 +36,9 @@ jobs:
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git -c checkout.workers=0 checkout -q --detach "$GITHUB_SHA"
 
+      - name: Test the release repair script
+        run: bash fork/resolve-merge.test.sh
+
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
