@@ -21,7 +21,12 @@ export type DictationWorkerRequest =
       readonly language: string | undefined;
       readonly pcm: string;
     }
-  | { readonly id: number; readonly method: "finish"; readonly sessionId: string }
+  | {
+      readonly id: number;
+      readonly method: "finish";
+      readonly sessionId: string;
+      readonly words?: boolean;
+    }
   | { readonly id: number; readonly method: "cancel"; readonly sessionId: string };
 
 export type DictationWorkerResponse =
@@ -50,7 +55,12 @@ export async function handleDictationWorkerRequest(
         return {
           id: request.id,
           ok: true,
-          value: finishResult(await engine.finish(request.sessionId)),
+          value: finishResult(
+            await engine.finish(
+              request.sessionId,
+              request.words === undefined ? {} : { words: request.words },
+            ),
+          ),
         };
       case "cancel":
         engine.cancel(request.sessionId);

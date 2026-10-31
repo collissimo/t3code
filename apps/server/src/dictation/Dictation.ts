@@ -97,7 +97,8 @@ const make = Effect.gen(function* () {
 
   const finish = Effect.fn("Dictation.finish")(function* (input: DictationFinishInput) {
     const result = yield* Effect.tryPromise({
-      try: () => engine.finish(input.sessionId),
+      try: () =>
+        engine.finish(input.sessionId, input.words === undefined ? {} : { words: input.words }),
       catch: toDictationError,
     });
     return finishResult(result);

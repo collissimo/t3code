@@ -47,8 +47,20 @@ export interface DictationEngineOptions {
   readonly log?: (message: string) => void;
 }
 
+export interface TranscriptWord {
+  readonly text: string;
+  /** Milliseconds from the start of the recording, pauses included. */
+  readonly t0: number;
+  readonly t1: number;
+}
+
 export type TranscriptResult =
-  | { readonly text: string; readonly reason?: undefined }
+  | {
+      readonly text: string;
+      readonly reason?: undefined;
+      /** Only when asked for and the model can time words. */
+      readonly words?: ReadonlyArray<TranscriptWord>;
+    }
   | { readonly text: ""; readonly reason: "no-speech" | "no-audio" };
 
 interface LoadedModel {
@@ -104,29 +116,54 @@ export function splitAtPauses(audio: Float32Array): ReadonlyArray<Float32Array> 
   return pieces;
 }
 
+/** A stretch of the shortened audio and where it began in the recording, in samples. */
+export interface KeptSpan {
+  readonly keptStart: number;
+  readonly recordingStart: number;
+  readonly length: number;
+}
+
+export const keptSpans = (segments: ReadonlyArray<TranscribeCpp.VadSegment>): Array<KeptSpan> => {
+  const spans: Array<KeptSpan> = [];
+  let keptStart = 0;
+  let previousEnd: number | undefined;
+  const add = (recordingStart: number, end: number) => {
+    spans.push({ keptStart, recordingStart, length: end - recordingStart });
+    keptStart += end - recordingStart;
+  };
+  for (const { startSample, endSample } of segments) {
+    if (previousEnd !== undefined) {
+      add(previousEnd, Math.min(startSample, previousEnd + KEPT_PAUSE_SAMPLES));
+    }
+    add(startSample, endSample);
+    previousEnd = endSample;
+  }
+  return spans;
+};
+
 /** The audio of `segments`, with the pauses between them cut down to a short gap. */
 export function keepSpeech(
   audio: Float32Array,
   segments: ReadonlyArray<TranscribeCpp.VadSegment>,
 ): Float32Array {
-  const parts: Array<Float32Array> = [];
-  let previousEnd: number | undefined;
-  for (const { startSample, endSample } of segments) {
-    if (previousEnd !== undefined) {
-      parts.push(
-        audio.subarray(previousEnd, Math.min(startSample, previousEnd + KEPT_PAUSE_SAMPLES)),
-      );
-    }
-    parts.push(audio.subarray(startSample, endSample));
-    previousEnd = endSample;
-  }
-  const speech = new Float32Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    speech.set(part, offset);
-    offset += part.length;
+  const spans = keptSpans(segments);
+  const speech = new Float32Array(spans.reduce((sum, span) => sum + span.length, 0));
+  for (const span of spans) {
+    speech.set(
+      audio.subarray(span.recordingStart, span.recordingStart + span.length),
+      span.keptStart,
+    );
   }
   return speech;
+}
+
+/** Word times come back on the shortened audio; clicks and frames live on the recording's clock. */
+export function toRecordingMs(keptMs: number, spans: ReadonlyArray<KeptSpan>): number {
+  if (spans.length === 0) return keptMs;
+  const sample = (keptMs / 1000) * SAMPLE_RATE;
+  const span =
+    spans.find((candidate) => sample < candidate.keptStart + candidate.length) ?? spans.at(-1)!;
+  return Math.round(((span.recordingStart + (sample - span.keptStart)) / SAMPLE_RATE) * 1000);
 }
 
 export function decodePcm16(base64: string): Float32Array {
@@ -194,7 +231,10 @@ export class DictationEngine {
   }
 
   /** Ends a session and transcribes all of it. */
-  async finish(sessionId: string): Promise<TranscriptResult> {
+  async finish(
+    sessionId: string,
+    options?: { readonly words?: boolean },
+  ): Promise<TranscriptResult> {
     const session = this.#sessions.get(sessionId);
     this.#sessions.delete(sessionId);
     this.#lastUsedAt = this.#now();
@@ -209,33 +249,52 @@ export class DictationEngine {
     // A preview run in flight is aborted instead of making the final run wait for it.
     this.#previewAbort?.abort();
     const started = this.#now();
-    const text = await this.#exclusive(async () => {
+    const canTimeWords = ["word", "token"].includes(loaded.model.capabilities.maxTimestampKind);
+    const wantWords = options?.words === true && canTimeWords;
+    const { text, words } = await this.#exclusive(async () => {
       const texts: Array<string> = [];
-      for (const piece of splitAtPauses(await this.#speechOnly(audio))) {
-        try {
-          const result = await loaded.session.run(
-            piece,
-            this.#runOptions(loaded, session.language),
-          );
+      const words: Array<TranscriptWord> = [];
+      const { speech, spans } = await this.#speechWithSpans(audio);
+      let pieceStartMs = 0;
+      for (const piece of splitAtPauses(speech)) {
+        const collect = (result: TranscribeCpp.Transcript) => {
           texts.push(result.text);
+          if (!wantWords) return;
+          for (const word of result.words) {
+            words.push({
+              text: word.text.trim(),
+              t0: toRecordingMs(pieceStartMs + word.t0Ms, spans),
+              t1: toRecordingMs(pieceStartMs + word.t1Ms, spans),
+            });
+          }
+        };
+        try {
+          collect(
+            await loaded.session.run(piece, {
+              ...this.#runOptions(loaded, session.language),
+              ...(wantWords ? { timestamps: "word" as const } : {}),
+            }),
+          );
         } catch (error) {
           const module = await this.#loadModule();
           if (error instanceof module.OutputTruncated && error.partialResult !== undefined) {
             // One piece that ran away must not cost the rest of the recording.
-            texts.push(error.partialResult.text);
+            collect(error.partialResult);
           } else if (!(error instanceof module.InputTooShort)) {
             throw error;
           }
         }
+        pieceStartMs += (piece.length / SAMPLE_RATE) * 1000;
       }
-      return texts.join(" ");
+      return { text: texts.join(" "), words };
     });
     this.#lastUsedAt = this.#now();
     const cleaned = text.split(/\s+/).filter(Boolean).join(" ");
     this.#options.log?.(
       `transcribed ${(audio.length / SAMPLE_RATE).toFixed(1)}s of audio in ${this.#now() - started}ms`,
     );
-    return cleaned ? { text: cleaned } : { text: "", reason: "no-speech" };
+    if (!cleaned) return { text: "", reason: "no-speech" };
+    return wantWords ? { text: cleaned, words } : { text: cleaned };
   }
 
   cancel(sessionId: string): void {
@@ -314,14 +373,20 @@ export class DictationEngine {
 
   /** Must run inside #exclusive: a VAD session serves one run at a time. */
   async #speechOnly(audio: Float32Array): Promise<Float32Array> {
+    return (await this.#speechWithSpans(audio)).speech;
+  }
+
+  async #speechWithSpans(
+    audio: Float32Array,
+  ): Promise<{ readonly speech: Float32Array; readonly spans: ReadonlyArray<KeptSpan> }> {
     const vad = await this.#loadVad();
-    if (vad === undefined) return audio;
+    if (vad === undefined) return { speech: audio, spans: [] };
     try {
       const { segments } = await vad.session.run(audio, VAD_OPTIONS);
-      return keepSpeech(audio, segments);
+      return { speech: keepSpeech(audio, segments), spans: keptSpans(segments) };
     } catch (error) {
       this.#options.log?.(`voice activity detection failed, keeping pauses: ${describe(error)}`);
-      return audio;
+      return { speech: audio, spans: [] };
     }
   }
 

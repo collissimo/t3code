@@ -9,8 +9,10 @@ import {
   SAMPLE_RATE,
   decodePcm16,
   keepSpeech,
+  keptSpans,
   normalizeLanguage,
   splitAtPauses,
+  toRecordingMs,
   type TranscribeModule,
 } from "./DictationEngine.ts";
 import { dictationBackend } from "./localDictation.ts";
@@ -136,6 +138,16 @@ describe("audio input", () => {
     expect(kept.length).toBe(Math.round(3.4 * SAMPLE_RATE));
     expect(keepSpeech(audio, [])).toHaveLength(0);
   });
+  it("puts a word back on the recording's clock across a cut pause", () => {
+    const spans = keptSpans([
+      { startSample: SAMPLE_RATE, endSample: 2 * SAMPLE_RATE },
+      { startSample: 9 * SAMPLE_RATE, endSample: 10 * SAMPLE_RATE },
+    ]);
+    expect(toRecordingMs(500, spans)).toBe(1_500);
+    // 1 s of speech and the kept 0.4 s of the pause come before the second stretch.
+    expect(toRecordingMs(1_600, spans)).toBe(9_200);
+    expect(toRecordingMs(1_600, [])).toBe(1_600);
+  });
   it("reads the backend from the environment, auto when unset or unknown", () => {
     expect(dictationBackend(" CPU ")).toBe("cpu");
     expect(dictationBackend("vulkan")).toBe("vulkan");
@@ -159,7 +171,7 @@ class FakeModel {
   runs: Array<{ length: number; language: string | undefined }> = [];
   disposed = false;
   readonly backend = "CPU";
-  readonly capabilities = { languages: ["de", "en"] };
+  readonly capabilities = { languages: ["de", "en"], maxTimestampKind: "word" };
   static async load(path: string) {
     FakeModel.loads.push(path);
     return new FakeModel();
@@ -170,7 +182,14 @@ class FakeModel {
         this.runs.push({ length: pcm.length, language: opts.language });
         FakeModel.runLengths.push(pcm.length);
         if (FakeModel.runError !== undefined) throw FakeModel.runError;
-        return { text: "  Hallo   Welt ", aborted: false };
+        return {
+          text: "  Hallo   Welt ",
+          aborted: false,
+          words: [
+            { text: " Hallo", t0Ms: 100, t1Ms: 400 },
+            { text: " Welt", t0Ms: 1_600, t1Ms: 1_800 },
+          ],
+        };
       },
       dispose: () => undefined,
     };
@@ -228,6 +247,25 @@ describe("DictationEngine", () => {
     engine.append("a", "de-DE", speech(2));
     expect(await engine.finish("a")).toEqual({ text: "Hallo Welt" });
     expect(FakeModel.loads).toEqual(["model.gguf"]);
+  });
+
+  it("times words on the recording's clock only when asked to", async () => {
+    FakeModel.vadSegments = [
+      { startSample: SAMPLE_RATE, endSample: 2 * SAMPLE_RATE },
+      { startSample: 9 * SAMPLE_RATE, endSample: 10 * SAMPLE_RATE },
+    ];
+    const { engine } = makeEngine(undefined, async () => "vad.gguf");
+    engine.append("a", "de", speech(10));
+    expect(await engine.finish("a", { words: true })).toEqual({
+      text: "Hallo Welt",
+      words: [
+        { text: "Hallo", t0: 1_100, t1: 1_400 },
+        { text: "Welt", t0: 9_200, t1: 9_400 },
+      ],
+    });
+    engine.append("b", "de", speech(10));
+    expect(await engine.finish("b")).toEqual({ text: "Hallo Welt" });
+    FakeModel.vadSegments = [];
   });
 
   it("transcribes a long recording in pieces and joins them", async () => {

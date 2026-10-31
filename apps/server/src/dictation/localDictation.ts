@@ -96,5 +96,12 @@ export function finishResult(result: TranscriptResult): DictationFinishResult {
   }
   const cleaned = splitCodeword(removeFillers(result.text), DEFAULT_STRUCTURE_CODEWORDS);
   if (cleaned.text === "") return { text: "", reason: "no-speech", structureRequested: false };
-  return { text: cleaned.text, structureRequested: cleaned.found };
+  if (result.words === undefined) return { text: cleaned.text, structureRequested: cleaned.found };
+  // Fillers go word by word: the words carry the times a capture lines its clicks up with.
+  const words = result.words.filter((word) => removeFillers(word.text) !== "");
+  return {
+    text: cleaned.text,
+    structureRequested: cleaned.found,
+    words: cleaned.found ? words.slice(0, -1) : words,
+  };
 }
