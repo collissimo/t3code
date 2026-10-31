@@ -49,3 +49,9 @@ Antigravity can still send native approval requests in **Full access**. It only 
 approvals for actions that support them.
 
 See the [provider guides](./install.md#providers) for setup and provider-specific limits.
+
+## Script tool
+
+The script tool lets an agent in a full-access thread run one JavaScript program that makes many file, shell, and T3 tool calls, and reads only what the program prints. Turn it on in **Settings → Labs**. It is off by default.
+
+The program's file and shell calls skip the provider's permission prompts and hooks, which is why other permission modes refuse it. It cannot reach MCP servers you configured in the provider. For Codex, [Code mode](./providers-codex.md#code-mode) is the native version and also reaches those servers.

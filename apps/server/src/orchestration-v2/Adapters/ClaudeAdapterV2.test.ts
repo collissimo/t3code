@@ -663,7 +663,12 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
 });
 
 describe("ClaudeAdapterV2 device instructions", () => {
-  const options = (input: { readonly mcp: boolean; readonly deviceToolsAvailable: boolean }) =>
+  interface OptionsInput {
+    readonly mcp: boolean;
+    readonly deviceToolsAvailable: boolean;
+    readonly scriptToolAvailable?: boolean;
+  }
+  const options = (input: OptionsInput) =>
     ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: {
         instanceId: ProviderInstanceId.make("claudeAgent"),
@@ -676,9 +681,10 @@ describe("ClaudeAdapterV2 device instructions", () => {
         ? { mcpServers: { "t3-code": { type: "http" as const, url: "http://127.0.0.1/mcp" } } }
         : {}),
       deviceToolsAvailable: input.deviceToolsAvailable,
+      scriptToolAvailable: input.scriptToolAvailable ?? false,
       environment: {},
     });
-  const append = (input: { readonly mcp: boolean; readonly deviceToolsAvailable: boolean }) =>
+  const append = (input: OptionsInput) =>
     (options(input).systemPrompt as { readonly append?: string }).append ?? "";
 
   it("gives a session with device access the device block and the ToolSearch line to load it", () => {
@@ -690,6 +696,11 @@ describe("ClaudeAdapterV2 device instructions", () => {
   it("leaves the device block out without device access or without T3 tools", () => {
     assert.notInclude(append({ mcp: true, deviceToolsAvailable: false }), "## T3 Code devices");
     assert.notInclude(append({ mcp: false, deviceToolsAvailable: true }), "## T3 Code devices");
+    assert.notInclude(append({ mcp: true, deviceToolsAvailable: true }), "## T3 Code script tool");
+    assert.include(
+      append({ mcp: true, deviceToolsAvailable: false, scriptToolAvailable: true }),
+      "select:mcp__t3-code__script",
+    );
   });
 
   it("gives native subagents the device block only in a session with device access", async () => {
