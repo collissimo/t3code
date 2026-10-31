@@ -230,6 +230,7 @@ const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidErro
 import { markDictatedText } from "@t3tools/client-runtime/voice-input/dictationMarker";
 import { useDictation } from "../../dictation/useDictation";
 import { ComposerDictationButton } from "./ComposerDictationButton";
+import { DictationHistoryDialog } from "./DictationHistoryDialog";
 import { toastManager } from "../ui/toast";
 import { PlayIcon } from "lucide-react";
 import { proposedPlanTitle } from "@t3tools/shared/proposedPlanText";
@@ -2461,11 +2462,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const toggleDictationStable = useStableCallback(dictation.toggle);
   const cancelDictationStable = useStableCallback(dictation.cancel);
+  const insertDictationFromHistoryStable = useStableCallback(dictation.insertFromHistory);
+  const [dictationHistoryOpen, setDictationHistoryOpen] = useState(false);
+  const openDictationHistoryStable = useStableCallback(() => setDictationHistoryOpen(true));
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window keydown listener for the dictation shortcuts and Esc
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
+        // The open history takes Esc for itself, so closing it cannot drop a running recording.
+        if (dictationHistoryOpen) return;
         // Before anything else claims Esc (it can also interrupt a running turn).
         if (cancelDictationStable()) {
           event.preventDefault();
@@ -2480,7 +2486,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           modelPickerOpen: isComposerModelPickerOpen,
         },
       });
-      if (command !== "composer.dictate" && command !== "composer.dictateStructured") return;
+      if (
+        command !== "composer.dictate" &&
+        command !== "composer.dictateStructured" &&
+        command !== "composer.dictationHistory"
+      ) {
+        return;
+      }
       // With several composers on screen, the one holding focus dictates.
       const focusedForm = document.activeElement?.closest("form");
       if (
@@ -2493,12 +2505,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
+      if (command === "composer.dictationHistory") {
+        setDictationHistoryOpen((open) => !open);
+        return;
+      }
       toggleDictationStable(command === "composer.dictateStructured");
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [
     cancelDictationStable,
+    dictationHistoryOpen,
     isComposerModelPickerOpen,
     keybindings,
     terminalOpen,
@@ -3481,6 +3498,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       keybindings,
                       "composer.dictateStructured",
                     )}
+                    historyShortcutLabel={shortcutLabelForCommand(
+                      keybindings,
+                      "composer.dictationHistory",
+                    )}
+                    onOpenHistory={openDictationHistoryStable}
+                  />
+                  <DictationHistoryDialog
+                    open={dictationHistoryOpen}
+                    onOpenChange={setDictationHistoryOpen}
+                    dictateShortcutLabel={shortcutLabelForCommand(keybindings, "composer.dictate")}
+                    onInsert={insertDictationFromHistoryStable}
                   />
                 </div>
                 <div

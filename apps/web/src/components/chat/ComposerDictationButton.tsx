@@ -1,10 +1,25 @@
-import { ChevronDownIcon, LoaderCircleIcon, MicIcon, SparklesIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  HistoryIcon,
+  LoaderCircleIcon,
+  MicIcon,
+  SparklesIcon,
+} from "lucide-react";
 
 import { DICTATION_LANGUAGES } from "../../dictation/dictationLanguages";
 import type { DictationState } from "../../dictation/useDictation";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useComposerMenuProps } from "./composerEventScope";
 
@@ -24,6 +39,8 @@ export function ComposerDictationButton(props: {
   readonly onToggle: (structured: boolean) => void;
   readonly dictateShortcutLabel: string | null;
   readonly structuredShortcutLabel: string | null;
+  readonly historyShortcutLabel: string | null;
+  readonly onOpenHistory: () => void;
   readonly language: string;
   readonly onLanguageChange: (language: string) => void;
 }) {
@@ -153,6 +170,14 @@ export function ComposerDictationButton(props: {
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>
+          <MenuSeparator />
+          <MenuItem onClick={props.onOpenHistory}>
+            <HistoryIcon />
+            History
+            {props.historyShortcutLabel ? (
+              <MenuShortcut>{props.historyShortcutLabel}</MenuShortcut>
+            ) : null}
+          </MenuItem>
         </MenuPopup>
       </Menu>
     </div>

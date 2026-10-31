@@ -113,6 +113,9 @@ shift-click, or ending with the word "Reinschrift") to get a structured prompt, 
 cancel a recording or to insert the plain transcript while it is being rewritten. Both keys
 can be rebound in Settings → Keybindings ("Composer: Dictate").
 
+- **Shift+F9** (or the arrow beside the mic) opens the history of everything dictated: Enter or
+  the arrow button inserts an entry, a click shows it in full. A structured prompt keeps its plain
+  transcript as the entry before it. The newest 10,000 stay in this client's IndexedDB.
 - Dictated text starts with `[STT]`, once per prompt, so you and agents can tell it was spoken.
   Thread titles leave it out. The iPhone dictation does the same; the t3-voice app does not.
 - Dictation expects German. The arrow beside the mic button switches the language
