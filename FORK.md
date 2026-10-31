@@ -165,6 +165,13 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 - Speech and pointing do not run in step, so sentences are never cut at a click: whole sentences
   own a keyframe, click bursts fold into one (`clicked ×3`), and clicks the screen did not answer
   read as `pointed`. On 32 real captures this took cuts through sentences from 59 of 127 lines to 1.
+- Each keyframe is cropped on its own to what happened around it, with Scrawl's rules and numbers:
+  the input its line names, what a click changed, and edges moved off text
+  (`frames-full/` keeps the whole screen). The contact sheet packs crops of any shape into justified
+  rows, one chip size throughout. Budget: 6 keyframes up to 40 s, one more per 20 s, at most 12;
+  ordinary actions fill only the first 6. A window or cursor log improves the crops when
+  `CaptureRecording` has one. On the 43 real Scrawl captures, given those logs, the crops reproduce
+  Scrawl's own (median overlap 1.00); without them 0.91.
 - Uses the dictation model above, with word times mapped back across the pauses it cuts out.
 - The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
   not keep it out on Windows 10 22H2.

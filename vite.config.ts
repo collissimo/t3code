@@ -168,6 +168,8 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
+      // Copied whole from Scrawl; one line, since pretty-printing makes it 50,000.
+      "apps/web/src/scrawl/autocrop-corpus.json",
       "**/*.graphql.ts",
       "packages/source-control-github/schema/**",
       "apps/server/schema/**",
