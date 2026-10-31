@@ -4,20 +4,32 @@
 // @effect-diagnostics globalDateInEffect:off -- Same clock as above.
 // @effect-diagnostics nodeBuiltinImport:off -- Bundles are plain files written outside any Effect service.
 // The desktop half of a Scrawl capture: the global shortcut, the mouse and Shift watcher, the ink
-// and the recording pill, and the bundle on disk. The renderer records and builds the bundle.
+// and the recording pill, and the bundles on disk. The renderer records and builds the bundle.
 
 import {
+  DEFAULT_SCRAWL_SHORTCUT,
   SCRAWL_INK_HOLD_MS,
+  SCRAWL_SHORTCUT_STATE_ACTION,
   SCRAWL_TOGGLE_ACTION,
+  type ClientSettings,
   type ScrawlAppendVideoInput,
   type ScrawlCaptureRef,
+  type ScrawlCaptureSummary,
+  type ScrawlReadFileInput,
+  type ScrawlRetention,
+  type ScrawlSetPinnedInput,
+  type ScrawlShortcutAvailability,
+  type ScrawlShortcutState,
   type ScrawlStartResult,
   type ScrawlStopResult,
+  type ScrawlUnfinished,
   type ScrawlWriteFileInput,
+  type SnapShotKeyChord,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Electron from "electron";
 import * as NodeFSP from "node:fs/promises";
@@ -25,8 +37,22 @@ import * as NodePath from "node:path";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { loadWindowsForegroundApi } from "../electron/WindowsForeground.ts";
+import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import { activeWindow } from "../snapShot/ActiveWindow.ts";
+import { snapShotShortcutSystemConflict, toElectronAccelerator } from "../snapShot/snapShot.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import {
+  PINNED_FILE,
+  REBUILT_ONCE_FILE,
+  planRebuilds,
+  planRetention,
+  readCaptureFolder,
+  readCaptureFolders,
+  removeJournal,
+  summarize,
+  unfinishedOf,
+  writeJournal,
+} from "./captureStore.ts";
 import {
   mergeCaptureInput,
   pointerLookupKey,
@@ -40,7 +66,6 @@ import { startScrawlContextProcess, type ScrawlContextProcess } from "./scrawlCo
 import { loadWindowAtPoint } from "./windowAtPoint.ts";
 import { taskbarStrip } from "./windowList.ts";
 
-const DEFAULT_SHORTCUT = "Alt+Shift+S";
 // Another program (the Scrawl app uses the same keys) may hold the shortcut and let go of it later.
 const SHORTCUT_RETRY_MS = 15_000;
 // Short presses must not fall between two looks. Polling needs no hook, no message pump and no
@@ -50,9 +75,10 @@ const VK_LBUTTON = 0x01;
 const VK_SHIFT = 0x10;
 const FLAG_SHORTCUT = "Alt+Shift+F";
 const LOOKUP_DRAIN_MS = 400;
-// Like Scrawl: frames, text and contact sheet stay, the heavy media goes.
-const MEDIA_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
-const MEDIA_FILES = ["recording.mp4", "recording.webm", "audio.wav"];
+// The input a crash of the whole app can lose. A reload loses none: this process keeps it.
+const JOURNAL_INTERVAL_MS = 5_000;
+const RETENTION_INTERVAL_MS = 60 * 60 * 1000;
+const MAX_READ_BYTES = 32 * 1024 * 1024;
 const PILL_WIDTH = 96;
 const PILL_HEIGHT = 30;
 
@@ -75,6 +101,24 @@ export class DesktopScrawl extends Context.Service<
       input: ScrawlAppendVideoInput,
     ) => Effect.Effect<void, DesktopScrawlError>;
     readonly writeFile: (input: ScrawlWriteFileInput) => Effect.Effect<void, DesktopScrawlError>;
+    readonly readFile: (
+      input: ScrawlReadFileInput,
+    ) => Effect.Effect<Uint8Array, DesktopScrawlError>;
+    readonly listUnfinished: () => Effect.Effect<ReadonlyArray<ScrawlUnfinished>>;
+    readonly beginRebuild: (
+      input: ScrawlCaptureRef,
+    ) => Effect.Effect<ScrawlUnfinished, DesktopScrawlError>;
+    readonly markBuilt: (input: ScrawlCaptureRef) => Effect.Effect<void>;
+    readonly listCaptures: () => Effect.Effect<ReadonlyArray<ScrawlCaptureSummary>>;
+    readonly setPinned: (input: ScrawlSetPinnedInput) => Effect.Effect<void, DesktopScrawlError>;
+    readonly trash: (input: ScrawlCaptureRef) => Effect.Effect<void, DesktopScrawlError>;
+    readonly reveal: (input: ScrawlCaptureRef) => Effect.Effect<void, DesktopScrawlError>;
+    readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
+    readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
+    readonly shortcutState: Effect.Effect<ScrawlShortcutState>;
+    readonly checkShortcut: (
+      shortcut: SnapShotKeyChord,
+    ) => Effect.Effect<ScrawlShortcutAvailability>;
   }
 >()("@t3tools/desktop/scrawl/DesktopScrawl") {}
 
@@ -91,19 +135,6 @@ const PILL_PAGE = `<!doctype html><html><body style="margin:0;background:#18181b
 <span style="width:9px;height:9px;border-radius:50%;background:#ef4444"></span><span id="t">0:00</span>
 <script>window.setClock=(v)=>{document.getElementById("t").textContent=v}</script></body></html>`;
 
-const dropOldMedia = async (capturesDir: string, now: number) => {
-  const bundles = await NodeFSP.readdir(capturesDir).catch(() => [] as Array<string>);
-  for (const bundle of bundles) {
-    if (!bundle.endsWith(".scrawl")) continue;
-    const folder = NodePath.join(capturesDir, bundle);
-    const stat = await NodeFSP.stat(folder).catch(() => null);
-    if (stat === null || now - stat.mtimeMs < MEDIA_KEPT_MS) continue;
-    await Promise.all(
-      MEDIA_FILES.map((file) => NodeFSP.rm(NodePath.join(folder, file), { force: true })),
-    ).catch(() => undefined);
-  }
-};
-
 const dataUrl = (html: string) => `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 
 const overlayOptions = (bounds: Electron.Rectangle): Electron.BrowserWindowConstructorOptions => ({
@@ -119,6 +150,18 @@ const overlayOptions = (bounds: Electron.Rectangle): Electron.BrowserWindowConst
   show: false,
   webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false },
 });
+
+const probeShortcut = (candidate: string): ScrawlShortcutAvailability => {
+  try {
+    if (!Electron.globalShortcut.register(candidate, () => undefined)) {
+      return { available: false, message: "Another program is using this shortcut" };
+    }
+    Electron.globalShortcut.unregister(candidate);
+    return { available: true, message: null };
+  } catch {
+    return { available: false, message: "The system could not register this shortcut" };
+  }
+};
 
 const toError = (cause: unknown) =>
   new DesktopScrawlError({ reason: cause instanceof Error ? cause.message : String(cause) });
@@ -137,6 +180,9 @@ interface RunningCapture {
   readonly ink: Electron.BrowserWindow;
   readonly pill: Electron.BrowserWindow;
   readonly inputTimer: ReturnType<typeof setInterval>;
+  readonly journalTimer: ReturnType<typeof setInterval>;
+  readonly session: ScrawlStartResult;
+  journalWrites: Promise<void>;
   inkTimer: ReturnType<typeof setTimeout> | null;
   readonly clockTimer: ReturnType<typeof setInterval>;
 }
@@ -144,12 +190,24 @@ interface RunningCapture {
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const services = yield* Effect.context<never>();
   const capturesDir = NodePath.join(environment.baseDir, "scrawl", "captures");
+  const initialSettings = yield* clientSettings.get.pipe(
+    Effect.map(Option.getOrNull),
+    Effect.orElseSucceed(() => null),
+  );
   let running: RunningCapture | null = null;
-  // Finished captures keep writing their frames and summary after the watcher stopped.
-  const bundles = new Map<string, string>();
   let nextIndex = 0;
+  let retention: ScrawlRetention = initialSettings?.scrawlRetention ?? "week";
+  let accelerator = toElectronAccelerator(
+    initialSettings?.scrawlShortcut ?? DEFAULT_SCRAWL_SHORTCUT,
+  );
+  let shortcutHeld = false;
+  let shortcutSuppressed = false;
+  let shortcutRetry: ReturnType<typeof setInterval> | null = null;
+  // Ids are checked by the contract, and finished captures keep writing frames and a summary.
+  const bundleOf = (id: string) => NodePath.join(capturesDir, `${id}.scrawl`);
 
   const ink = (capture: RunningCapture, script: string) => {
     if (!capture.ink.isDestroyed()) void capture.ink.webContents.executeJavaScript(script, true);
@@ -209,7 +267,6 @@ const make = Effect.gen(function* () {
     // The renderer owns the capture and only starts when it has none, so one left here lost its
     // renderer to a reload. Without this its ink and pill would stay on screen for good.
     if (running !== null) tearDown(running);
-    void dropOldMedia(capturesDir, Date.now());
     const cursor = Electron.screen.getCursorScreenPoint();
     const display = Electron.screen.getDisplayNearestPoint(cursor);
     const sources = yield* Effect.tryPromise({
@@ -324,8 +381,24 @@ const make = Effect.gen(function* () {
       current.lookups?.look(key, point.x, point.y);
     };
 
+    const scale = display.scaleFactor;
+    const session: ScrawlStartResult = {
+      id,
+      sourceId: source.id,
+      width: Math.round(display.bounds.width * scale),
+      height: Math.round(display.bounds.height * scale),
+      startedAtMs,
+      app: front?.owner.name.replace(/\.exe$/i, "") ?? "",
+      windowTitle: front?.title ?? "",
+      bundlePath,
+    };
     const capture: RunningCapture = {
       id,
+      session,
+      journalWrites: Promise.resolve(),
+      journalTimer: setInterval(() => {
+        if (running !== null) void saveJournal(running);
+      }, JOURNAL_INTERVAL_MS),
       bundlePath,
       startedAtMs,
       tracker,
@@ -348,19 +421,23 @@ const make = Effect.gen(function* () {
       }, 1000),
     };
     running = capture;
-    bundles.set(id, bundlePath);
-    const scale = display.scaleFactor;
-    return {
-      id,
-      sourceId: source.id,
-      width: Math.round(display.bounds.width * scale),
-      height: Math.round(display.bounds.height * scale),
-      startedAtMs,
-      app: front?.owner.name.replace(/\.exe$/i, "") ?? "",
-      windowTitle: front?.title ?? "",
-      bundlePath,
-    } satisfies ScrawlStartResult;
+    saveJournal(capture);
+    return session;
   });
+
+  const inputOf = (capture: RunningCapture, hits: ReadonlyMap<string, ElementHit> = new Map()) =>
+    mergeCaptureInput(capture.tracker.result(), capture.context.result(), hits, [
+      capture.windowTitle,
+    ]);
+
+  const saveJournal = (capture: RunningCapture, hits?: ReadonlyMap<string, ElementHit>) => {
+    const journal = { session: capture.session, input: inputOf(capture, hits) };
+    capture.journalWrites = capture.journalWrites
+      .then(() => writeJournal(capture.bundlePath, journal))
+      // Only a crash reads it, and the next write brings it up to date.
+      .catch(() => undefined);
+    return capture.journalWrites;
+  };
 
   const tearDown = (capture: RunningCapture, keepHelpers = false) => {
     if (!keepHelpers) {
@@ -369,6 +446,7 @@ const make = Effect.gen(function* () {
     }
     if (capture.flagShortcut) Electron.globalShortcut.unregister(FLAG_SHORTCUT);
     clearInterval(capture.inputTimer);
+    clearInterval(capture.journalTimer);
     if (capture.inkTimer !== null) clearTimeout(capture.inkTimer);
     clearInterval(capture.clockTimer);
     if (!capture.ink.isDestroyed()) capture.ink.destroy();
@@ -389,41 +467,30 @@ const make = Effect.gen(function* () {
         capture.watcher?.stop(),
       ]),
     );
-    return mergeCaptureInput(capture.tracker.result(), capture.context.result(), hits, [
-      capture.windowTitle,
-    ]);
+    yield* Effect.promise(() => saveJournal(capture, hits));
+    return inputOf(capture, hits);
   });
 
   const cancel = Effect.fn("DesktopScrawl.cancel")(function* (input: ScrawlCaptureRef) {
-    if (running?.id === input.id) tearDown(running);
-    const bundlePath = bundles.get(input.id);
-    bundles.delete(input.id);
-    if (bundlePath !== undefined) {
-      yield* Effect.promise(() =>
-        NodeFSP.rm(bundlePath, { recursive: true, force: true }).catch(() => undefined),
-      );
-    }
+    const capture = running?.id === input.id ? running : null;
+    if (capture !== null) tearDown(capture);
+    yield* Effect.promise(async () => {
+      await capture?.journalWrites;
+      await NodeFSP.rm(bundleOf(input.id), { recursive: true, force: true }).catch(() => undefined);
+    });
   });
 
   const appendVideo = Effect.fn("DesktopScrawl.appendVideo")(function* (
     input: ScrawlAppendVideoInput,
   ) {
-    const bundlePath = bundles.get(input.id);
-    if (bundlePath === undefined) {
-      return yield* new DesktopScrawlError({ reason: "Unknown capture." });
-    }
     yield* Effect.tryPromise({
-      try: () => NodeFSP.appendFile(NodePath.join(bundlePath, input.name), input.bytes),
+      try: () => NodeFSP.appendFile(NodePath.join(bundleOf(input.id), input.name), input.bytes),
       catch: toError,
     });
   });
 
   const writeFile = Effect.fn("DesktopScrawl.writeFile")(function* (input: ScrawlWriteFileInput) {
-    const bundlePath = bundles.get(input.id);
-    if (bundlePath === undefined) {
-      return yield* new DesktopScrawlError({ reason: "Unknown capture." });
-    }
-    const target = NodePath.join(bundlePath, input.path);
+    const target = NodePath.join(bundleOf(input.id), input.path);
     yield* Effect.tryPromise({
       try: async () => {
         await NodeFSP.mkdir(NodePath.dirname(target), { recursive: true });
@@ -433,39 +500,231 @@ const make = Effect.gen(function* () {
     });
   });
 
-  yield* Effect.acquireRelease(
-    Effect.promise(() => {
-      const run = Effect.runForkWith(services);
-      const register = () =>
-        Electron.globalShortcut.register(DEFAULT_SHORTCUT, () => {
-          run(
-            desktopWindow
-              .dispatchMenuAction(SCRAWL_TOGGLE_ACTION, { reveal: false })
-              .pipe(Effect.ignore),
-          );
+  const readFile = Effect.fn("DesktopScrawl.readFile")(function* (input: ScrawlReadFileInput) {
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const file = await NodeFSP.open(NodePath.join(bundleOf(input.id), input.path), "r");
+        try {
+          const bytes = new Uint8Array(Math.min(input.length, MAX_READ_BYTES));
+          const { bytesRead } = await file.read(bytes, 0, bytes.length, input.offset);
+          return bytes.subarray(0, bytesRead);
+        } finally {
+          await file.close();
+        }
+      },
+      catch: toError,
+    });
+  });
+
+  const listUnfinished = Effect.fn("DesktopScrawl.listUnfinished")(function* () {
+    // Only a renderer without a capture of its own asks, so one still here lost its renderer.
+    if (running !== null) {
+      const orphan = running;
+      orphan.tracker.shiftUp();
+      tearDown(orphan);
+      yield* Effect.promise(() => saveJournal(orphan));
+    }
+    return yield* Effect.promise(async () => {
+      const { owed, empty } = planRebuilds(await readCaptureFolders(capturesDir), null);
+      await Promise.all(
+        empty.map((capture) =>
+          NodeFSP.rm(capture.folder, { recursive: true, force: true }).catch(() => undefined),
+        ),
+      );
+      return owed.map(unfinishedOf);
+    });
+  });
+
+  const beginRebuild = Effect.fn("DesktopScrawl.beginRebuild")(function* (input: ScrawlCaptureRef) {
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const capture = await readCaptureFolder(bundleOf(input.id));
+        if (capture === null) throw new Error("This capture no longer exists.");
+        await NodeFSP.writeFile(NodePath.join(capture.folder, REBUILT_ONCE_FILE), "");
+        return unfinishedOf(capture);
+      },
+      catch: toError,
+    });
+  });
+
+  const markBuilt = Effect.fn("DesktopScrawl.markBuilt")(function* (input: ScrawlCaptureRef) {
+    yield* Effect.promise(() => removeJournal(bundleOf(input.id)).catch(() => undefined));
+  });
+
+  const listCaptures = Effect.fn("DesktopScrawl.listCaptures")(function* () {
+    return yield* Effect.promise(async () => {
+      const captures = await readCaptureFolders(capturesDir);
+      return captures
+        .map((capture) => summarize(capture, retention, running?.id ?? null))
+        .toSorted((left, right) => right.createdAtMs - left.createdAtMs);
+    });
+  });
+
+  const setPinned = Effect.fn("DesktopScrawl.setPinned")(function* (input: ScrawlSetPinnedInput) {
+    const marker = NodePath.join(bundleOf(input.id), PINNED_FILE);
+    yield* Effect.tryPromise({
+      try: () =>
+        input.pinned ? NodeFSP.writeFile(marker, "") : NodeFSP.rm(marker, { force: true }),
+      catch: toError,
+    });
+  });
+
+  const trash = Effect.fn("DesktopScrawl.trash")(function* (input: ScrawlCaptureRef) {
+    if (running?.id === input.id) {
+      return yield* new DesktopScrawlError({ reason: "This capture is still recording." });
+    }
+    yield* Effect.tryPromise({
+      try: () => Electron.shell.trashItem(bundleOf(input.id)),
+      catch: toError,
+    });
+  });
+
+  const reveal = Effect.fn("DesktopScrawl.reveal")(function* (input: ScrawlCaptureRef) {
+    yield* Effect.tryPromise({
+      try: async () => {
+        const failure = await Electron.shell.openPath(bundleOf(input.id));
+        if (failure !== "") throw new Error(failure);
+      },
+      catch: toError,
+    });
+  });
+
+  const run = Effect.runForkWith(services);
+
+  /** Moves to the bin, like Scrawl: the list named the date, and a wrong one can still be undone. */
+  const runRetention = async () => {
+    if (running !== null) return;
+    const actions = planRetention(
+      await readCaptureFolders(capturesDir),
+      retention,
+      null,
+      Date.now(),
+    );
+    for (const action of actions) {
+      const paths = action.kind === "bundle" ? [action.folder] : action.paths;
+      for (const path of paths) {
+        await Electron.shell.trashItem(path).catch((cause: unknown) => {
+          run(Effect.logWarning(`scrawl: could not move ${path} to the bin: ${String(cause)}`));
         });
-      const whenReady = async () => {
-        await Electron.app.whenReady();
-        if (register()) return null;
-        run(Effect.logWarning(`scrawl: ${DEFAULT_SHORTCUT} is taken by another program`));
-        const retry = setInterval(() => {
-          if (register()) clearInterval(retry);
-        }, SHORTCUT_RETRY_MS);
-        retry.unref?.();
-        return retry;
-      };
-      return whenReady();
+      }
+    }
+  };
+
+  const publishShortcutState = () => {
+    run(
+      desktopWindow
+        .dispatchMenuAction(SCRAWL_SHORTCUT_STATE_ACTION, { reveal: false })
+        .pipe(Effect.ignore),
+    );
+  };
+
+  const takeShortcut = () => {
+    try {
+      shortcutHeld = Electron.globalShortcut.register(accelerator, () => {
+        run(
+          desktopWindow
+            .dispatchMenuAction(SCRAWL_TOGGLE_ACTION, { reveal: false })
+            .pipe(Effect.ignore),
+        );
+      });
+    } catch {
+      shortcutHeld = false;
+    }
+    return shortcutHeld;
+  };
+
+  const releaseShortcut = () => {
+    if (shortcutRetry !== null) clearInterval(shortcutRetry);
+    shortcutRetry = null;
+    if (shortcutHeld) Electron.globalShortcut.unregister(accelerator);
+    shortcutHeld = false;
+  };
+
+  const applyShortcut = () => {
+    if (shortcutSuppressed || takeShortcut()) return;
+    run(Effect.logWarning(`scrawl: ${accelerator} is taken by another program`));
+    const retry = setInterval(() => {
+      if (!takeShortcut()) return;
+      clearInterval(retry);
+      if (shortcutRetry === retry) shortcutRetry = null;
+      publishShortcutState();
+    }, SHORTCUT_RETRY_MS);
+    retry.unref?.();
+    shortcutRetry = retry;
+  };
+
+  const configure = (settings: ClientSettings) =>
+    Effect.sync(() => {
+      retention = settings.scrawlRetention;
+      const next = toElectronAccelerator(settings.scrawlShortcut);
+      if (next === accelerator) return;
+      releaseShortcut();
+      accelerator = next;
+      applyShortcut();
+      publishShortcutState();
+    });
+
+  const setShortcutSuppressed = (suppressed: boolean) =>
+    Effect.sync(() => {
+      if (suppressed === shortcutSuppressed) return;
+      shortcutSuppressed = suppressed;
+      releaseShortcut();
+      applyShortcut();
+      publishShortcutState();
+    });
+
+  const shortcutState = Effect.sync((): ScrawlShortcutState => ({
+    accelerator,
+    // Letting go while the user records a new shortcut is not another program holding it.
+    registered: shortcutHeld || shortcutSuppressed,
+  }));
+
+  const checkShortcut = (shortcut: SnapShotKeyChord) =>
+    Effect.sync((): ScrawlShortcutAvailability => {
+      const conflict = snapShotShortcutSystemConflict(shortcut);
+      if (conflict !== null) return { available: false, message: conflict };
+      const candidate = toElectronAccelerator(shortcut);
+      // Electron refuses a second registration of keys this app already holds.
+      if (candidate === accelerator && shortcutHeld) return { available: true, message: null };
+      return probeShortcut(candidate);
+    });
+
+  yield* Effect.acquireRelease(
+    Effect.promise(async () => {
+      await Electron.app.whenReady();
+      applyShortcut();
+      void runRetention();
+      const retentionTimer = setInterval(() => void runRetention(), RETENTION_INTERVAL_MS);
+      retentionTimer.unref?.();
+      return retentionTimer;
     }),
-    (retry) =>
-      Effect.promise(async () => {
-        const timer = await retry;
-        if (timer !== null) clearInterval(timer);
-        Electron.globalShortcut.unregister(DEFAULT_SHORTCUT);
+    (retentionTimer) =>
+      Effect.sync(() => {
+        clearInterval(retentionTimer);
+        releaseShortcut();
         if (running !== null) tearDown(running);
       }),
   );
 
-  return DesktopScrawl.of({ start, stop, cancel, appendVideo, writeFile });
+  return DesktopScrawl.of({
+    start,
+    stop,
+    cancel,
+    appendVideo,
+    writeFile,
+    readFile,
+    listUnfinished,
+    beginRebuild,
+    markBuilt,
+    listCaptures,
+    setPinned,
+    trash,
+    reveal,
+    configure,
+    setShortcutSuppressed,
+    shortcutState,
+    checkShortcut,
+  });
 });
 
 export const layer = Layer.effect(DesktopScrawl, make);

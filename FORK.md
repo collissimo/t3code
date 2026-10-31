@@ -165,15 +165,16 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 - Besides clicks and ink, a capture logs the wheel, the cursor, which windows are on screen, app
   switches, Ctrl and Win shortcuts, and what a click or stroke landed on (`clicked button “Area”`).
   Only the cursor and flags work outside Windows. Typed text is never logged, AltGr counts as
-  typing, passwords are never read, and window titles stay in `scrawl.json`: they do not reach the
-  text an agent reads. Fields say only that they were clicked, not what they are called.
+  typing, passwords are never read, and a window title reaches the text an agent reads only in the
+  head line, as in the Scrawl app. Fields say only that they were clicked, not what they are called.
 - This runs in two helper processes, for the length of a capture: one reads Raw Input (no system-wide
   hook, so no program's mouse waits on it) and the window list, the other is a PowerShell asking UI
   Automation (about 80 MB). The first lookup in a Chromium-based app turns on that app's accessibility
   tree, which can slow a heavy page. T3 Code's own windows are not looked up, so clicks on them stay
   unnamed. A precision touchpad's two-finger scroll may not show as Raw Input wheel events (unchecked).
-- While the Scrawl app runs it holds Alt+Shift+S. T3 Code logs that and takes the shortcut within
-  15 seconds of Scrawl closing. The composer button works either way.
+- While the Scrawl app runs it holds Alt+Shift+S. Settings > SnapShots > Screen capture says so,
+  and T3 Code takes the shortcut within 15 seconds of Scrawl closing. The composer button and the
+  command palette work either way. Rebind it in the same place.
 - Speech and pointing do not run in step, so sentences are never cut at a click: whole sentences
   own a keyframe, click bursts fold into one (`clicked ×3`), and clicks the screen did not answer
   read as `pointed`. On 32 real captures this took cuts through sentences from 59 of 127 lines to 1.
@@ -196,5 +197,15 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 - The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
   not keep it out on Windows 10 22H2.
 - Bundles are in `<T3 home>/scrawl/captures` in Scrawl's format, so the Scrawl skill and the
-  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them. Video and audio are deleted after 7 days.
+  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them.
+- Video and audio go to disk as they are recorded and stay out of memory until the build, which reads
+  them back. A crash or reload during a capture loses at most the last seconds: the next launch
+  rebuilds it once from `unfinished.json`, `timing.json`, `audio.pcm` and the video. A capture that
+  fails is kept and offers a manual rebuild. Scene changes come from sampling the video again.
+- The recorder sets a 2-second keyframe interval on purpose: without it the MP4 muxer put nothing but
+  a header on disk for over 11 seconds, so a crash left no video. Measured in Chromium.
+- Past captures (Alt+Shift+H, palette, Settings) find, insert, pin, or bin a capture and show the
+  date retention acts on. Same presets and `.pinned` marker as Scrawl: by default video goes to the
+  Recycle Bin after 7 days and the capture after 30. The list and the hourly pass share one plan
+  (`apps/desktop/src/scrawl/captureStore.ts`), so the dates shown are what happens.
 - Code: `apps/desktop/src/scrawl/`, `apps/web/src/scrawl/`, `packages/contracts/src/scrawl.ts`.

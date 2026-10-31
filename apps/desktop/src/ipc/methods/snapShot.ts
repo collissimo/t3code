@@ -18,6 +18,7 @@ import type * as Electron from "electron";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
+import * as DesktopScrawl from "../../scrawl/DesktopScrawl.ts";
 import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -158,6 +159,8 @@ export const setSnapShotShortcutSuppressed = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.snapShot.setShortcutSuppressed")(function* (suppressed, event) {
     yield* ensureTrustedSnapShotSender(event);
     yield* (yield* DesktopSnapShot.DesktopSnapShot).setShortcutSuppressed(suppressed);
+    // One recorder records both shortcuts, and a held global shortcut never reaches it.
+    yield* (yield* DesktopScrawl.DesktopScrawl).setShortcutSuppressed(suppressed);
   }),
 });
 

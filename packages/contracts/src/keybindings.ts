@@ -102,6 +102,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "composer.dictate",
   "composer.dictateStructured",
   "composer.dictationHistory",
+  "scrawl.history",
   "chat.new",
   "chat.newLocal",
   "chat.newWithoutProject",

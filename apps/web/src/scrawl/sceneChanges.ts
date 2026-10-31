@@ -3,6 +3,17 @@
 // the fourth-worst block, and real transitions across at least four blocks still register.
 
 export const THUMB_WIDTH = 64;
+/** Perceived brightness of an RGBA thumbnail, one value per pixel. */
+export const lumaOf = (rgba: Uint8ClampedArray) => {
+  const luma = new Float32Array(rgba.length / 4);
+  for (let index = 0; index < luma.length; index++) {
+    const offset = index * 4;
+    luma[index] =
+      (0.2126 * rgba[offset]! + 0.7152 * rgba[offset + 1]! + 0.0722 * rgba[offset + 2]!) / 255;
+  }
+  return luma;
+};
+
 export const THUMB_HEIGHT = 36;
 const COLUMNS = 8;
 const ROWS = 6;

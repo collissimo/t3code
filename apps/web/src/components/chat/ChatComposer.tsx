@@ -233,6 +233,7 @@ import { useDictation } from "../../dictation/useDictation";
 import { ComposerDictationButton } from "./ComposerDictationButton";
 import { ComposerScrawlButton } from "./ComposerScrawlButton";
 import { cancelScrawl, type ScrawlDelivery } from "../../scrawl/scrawlCapture";
+import { isScrawlHistoryOpen } from "../../scrawl/scrawlHistory";
 import { DictationHistoryDialog } from "./DictationHistoryDialog";
 import { toastManager } from "../ui/toast";
 import { PlayIcon } from "lucide-react";
@@ -2502,7 +2503,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         // The open history takes Esc for itself, so closing it cannot drop a running recording.
-        if (dictationHistoryOpen) return;
+        if (dictationHistoryOpen || isScrawlHistoryOpen()) return;
         if (cancelScrawl()) {
           event.preventDefault();
           event.stopPropagation();

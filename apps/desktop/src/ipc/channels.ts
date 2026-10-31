@@ -44,6 +44,16 @@ export const SCRAWL_STOP_CHANNEL = "desktop:scrawl-stop";
 export const SCRAWL_CANCEL_CHANNEL = "desktop:scrawl-cancel";
 export const SCRAWL_APPEND_VIDEO_CHANNEL = "desktop:scrawl-append-video";
 export const SCRAWL_WRITE_FILE_CHANNEL = "desktop:scrawl-write-file";
+export const SCRAWL_READ_FILE_CHANNEL = "desktop:scrawl-read-file";
+export const SCRAWL_LIST_UNFINISHED_CHANNEL = "desktop:scrawl-list-unfinished";
+export const SCRAWL_BEGIN_REBUILD_CHANNEL = "desktop:scrawl-begin-rebuild";
+export const SCRAWL_MARK_BUILT_CHANNEL = "desktop:scrawl-mark-built";
+export const SCRAWL_LIST_CAPTURES_CHANNEL = "desktop:scrawl-list-captures";
+export const SCRAWL_SET_PINNED_CHANNEL = "desktop:scrawl-set-pinned";
+export const SCRAWL_TRASH_CHANNEL = "desktop:scrawl-trash";
+export const SCRAWL_REVEAL_CHANNEL = "desktop:scrawl-reveal";
+export const SCRAWL_GET_SHORTCUT_STATE_CHANNEL = "desktop:scrawl-get-shortcut-state";
+export const SCRAWL_CHECK_SHORTCUT_CHANNEL = "desktop:scrawl-check-shortcut";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";

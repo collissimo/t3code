@@ -1,7 +1,8 @@
-import { SCRAWL_TOGGLE_ACTION } from "@t3tools/contracts";
 import { LoaderCircleIcon, ScreenShareIcon } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 
+import { useClientSettings } from "../../hooks/useSettings";
+import { formatSnapShotShortcutLabel } from "../../lib/snapShotShortcut";
 import {
   getScrawlState,
   isScrawlAvailable,
@@ -19,24 +20,15 @@ const NOTICE_TONES = {
   error: "text-destructive",
 } as const;
 
-const SHORTCUT = "Alt+Shift+S";
-
 /** Records the screen with voice, clicks and ink. Only the desktop app can see the whole screen. */
 export function ComposerScrawlButton(props: { readonly delivery: ScrawlDelivery }) {
   const { phase, notice } = useSyncExternalStore(subscribeScrawl, getScrawlState);
   const { delivery } = props;
+  const shortcut = useClientSettings((settings) => settings.scrawlShortcut);
+  const shortcutLabel = formatSnapShotShortcutLabel(shortcut);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- offers this composer to a capture running outside React
   useEffect(() => registerScrawlDelivery(delivery), [delivery]);
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the global shortcut, which arrives as a desktop menu action
-  useEffect(
-    () =>
-      window.desktopBridge?.onMenuAction((action) => {
-        if (action === SCRAWL_TOGGLE_ACTION) toggleScrawl();
-      }),
-    [],
-  );
 
   if (!isScrawlAvailable()) return null;
   const recording = phase === "recording";
@@ -45,7 +37,7 @@ export function ComposerScrawlButton(props: { readonly delivery: ScrawlDelivery 
     phase === "building"
       ? "Building the capture"
       : recording
-        ? `Recording this screen · ${SHORTCUT} finishes · Esc discards`
+        ? `Recording this screen · ${shortcutLabel} finishes · Esc discards`
         : null;
   return (
     <>
@@ -80,7 +72,9 @@ export function ComposerScrawlButton(props: { readonly delivery: ScrawlDelivery 
           {busy ? <LoaderCircleIcon className="animate-spin" /> : <ScreenShareIcon />}
         </TooltipTrigger>
         <TooltipPopup>
-          {recording ? `Finish capture (${SHORTCUT})` : `Capture the screen (${SHORTCUT})`}
+          {recording
+            ? `Finish capture (${shortcutLabel})`
+            : `Capture the screen (${shortcutLabel})`}
         </TooltipPopup>
       </Tooltip>
     </>
