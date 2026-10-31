@@ -75,6 +75,9 @@ import {
   DeviceScreenshotToolkit,
   DeviceStandardToolkit,
 } from "./toolkits/device/tools.ts";
+import * as ScriptRunner from "../script/ScriptRunner.ts";
+import * as ScriptHandlers from "./toolkits/script/handlers.ts";
+import { ScriptToolkit } from "./toolkits/script/tools.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 
@@ -1115,6 +1118,28 @@ const layerEnvironmentToolkit = toolkitRegistration(
 
 export const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
+// Nested T3 calls need the same server instance the tools registered on, which layers memoize.
+const layerScriptT3Tools = Layer.effect(
+  ScriptHandlers.ScriptT3Tools,
+  McpServer.McpServer.asEffect().pipe(
+    Effect.map((server) =>
+      ScriptHandlers.ScriptT3Tools.of({
+        call: (request) =>
+          server.callTool({
+            name: request.name,
+            arguments: request.arguments as Record<string, unknown>,
+          }),
+      }),
+    ),
+  ),
+);
+
+export const layerScriptToolkit = toolkitRegistration(ScriptToolkit, ScriptHandlers.layer).pipe(
+  Layer.provide(ScriptRunner.layer),
+  Layer.provide(layerScriptT3Tools),
+  Layer.provide(McpServer.McpServer.layer),
+);
+
 export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentToolkit,
   AttachmentHandlers.layer,
@@ -1161,6 +1186,7 @@ export const layerTools = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,
+  layerScriptToolkit,
 );
 
 export const layer = layerTools.pipe(Layer.provideMerge(layerMcpTransport));

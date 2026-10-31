@@ -22,6 +22,7 @@ export function LabsSettingsPanel() {
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
         <LinkedEnvironmentsRow />
         <SimlockHostsRow />
+        <ScriptToolRow />
       </SettingsSection>
       <LegacyFeaturesSection />
     </SettingsPageContainer>
@@ -144,6 +145,27 @@ function LinkedEnvironmentsRow() {
             updateSettings({ linkedEnvironmentsEnabled: Boolean(checked) })
           }
           aria-label="Linked environments"
+        />
+      }
+    />
+  );
+}
+
+function ScriptToolRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("script-tool")}
+      settingKeys={["scriptToolEnabled"]}
+      description="Let agents in full-access threads run one program that makes many tool calls and reads only what it prints. Its file and shell calls skip provider permission prompts."
+      control={
+        <ScopedSwitch
+          settingKeys={["scriptToolEnabled"]}
+          checked={settings.scriptToolEnabled}
+          onCheckedChange={(checked) => updateSettings({ scriptToolEnabled: Boolean(checked) })}
+          aria-label="Script tool"
         />
       }
     />

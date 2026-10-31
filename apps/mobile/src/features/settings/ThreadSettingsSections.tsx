@@ -250,6 +250,27 @@ function BetaSettingsSection() {
         Let agents on a machine work on your other machines, and theirs on it. Turn it on for each
         machine. While it is off, nothing new starts over a link; tasks already running finish.
       </Text>
+      <SettingsSection title="Beta: Script tool">
+        {supported.map((environment) => (
+          <SettingsSwitchRow
+            key={environment.environmentId}
+            icon="curlybraces"
+            label={environment.label}
+            value={environment.serverConfig?.settings.scriptToolEnabled === true}
+            disabled={!writable.has(environment.environmentId)}
+            onValueChange={(value) =>
+              void updateSettings({
+                environmentId: environment.environmentId,
+                input: { patch: { scriptToolEnabled: value } },
+              })
+            }
+          />
+        ))}
+      </SettingsSection>
+      <Text className="px-2 text-sm text-foreground-muted">
+        Let agents in full-access threads run one program that makes many tool calls and reads only
+        what it prints. Its file and shell calls skip provider permission prompts.
+      </Text>
     </View>
   );
 }

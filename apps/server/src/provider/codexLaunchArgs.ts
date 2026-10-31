@@ -9,8 +9,15 @@ export const resolveCodexLaunchArgs = (
 
 const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> => tokenizeCliArgs(launchArgs);
 
-export const codexAppServerArgs = (launchArgs?: string) => [
+export const codexAppServerArgs = (
+  launchArgs?: string,
+  options?: { readonly codeMode?: boolean },
+) => [
   "app-server",
+  // Otherwise every thread opens with Codex's warning about unfinished features.
+  ...(options?.codeMode === true
+    ? ["--enable", "code_mode", "-c", "suppress_unstable_features_warning=true"]
+    : []),
   ...codexLaunchArgv(launchArgs),
 ];
 
