@@ -108,9 +108,7 @@ const strokesToMarks = (strokes: ReadonlyArray<ScrawlStroke>): Array<ManifestMar
 };
 
 /** Everything the hand touched, padded, or null when that is most of the screen anyway. */
-function activityBox(
-  recording: Pick<CaptureRecording, "input">,
-): {
+function activityBox(recording: Pick<CaptureRecording, "input">): {
   readonly x: number;
   readonly y: number;
   readonly width: number;
