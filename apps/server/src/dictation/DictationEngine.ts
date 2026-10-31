@@ -39,6 +39,8 @@ export interface DictationEngineOptions {
   readonly resolveModel: (language: string | undefined) => Promise<string>;
   /** Path of the Silero model, undefined when none is installed; pauses then reach the model. */
   readonly resolveVadModel?: () => Promise<string | undefined>;
+  /** Path of a model that can time words, for captures when the main model cannot. */
+  readonly resolveTimingModel?: (language: string | undefined) => Promise<string | undefined>;
   /** Let go of the model after this long without a recording; 0 keeps it. */
   readonly idleUnloadMs: number;
   /** transcribe.cpp backend; "auto" picks the GPU when there is one. */
@@ -83,6 +85,9 @@ interface RecordingSession {
   lastActiveAt: number;
   lastPreviewAt: number;
 }
+
+const modelCanTimeWords = (loaded: LoadedModel) =>
+  ["word", "token"].includes(loaded.model.capabilities.maxTimestampKind);
 
 /** "de-DE" -> "de"; the model knows languages by their two-letter code. */
 export function normalizeLanguage(language: string | undefined): string | undefined {
@@ -249,44 +254,18 @@ export class DictationEngine {
     // A preview run in flight is aborted instead of making the final run wait for it.
     this.#previewAbort?.abort();
     const started = this.#now();
-    const canTimeWords = ["word", "token"].includes(loaded.model.capabilities.maxTimestampKind);
-    const wantWords = options?.words === true && canTimeWords;
+    const canTimeWords = modelCanTimeWords(loaded);
+    const wantWords = options?.words === true;
     const { text, words } = await this.#exclusive(async () => {
-      const texts: Array<string> = [];
-      const words: Array<TranscriptWord> = [];
       const { speech, spans } = await this.#speechWithSpans(audio);
-      let pieceStartMs = 0;
-      for (const piece of splitAtPauses(speech)) {
-        const collect = (result: TranscribeCpp.Transcript) => {
-          texts.push(result.text);
-          if (!wantWords) return;
-          for (const word of result.words) {
-            words.push({
-              text: word.text.trim(),
-              t0: toRecordingMs(pieceStartMs + word.t0Ms, spans),
-              t1: toRecordingMs(pieceStartMs + word.t1Ms, spans),
-            });
-          }
-        };
-        try {
-          collect(
-            await loaded.session.run(piece, {
-              ...this.#runOptions(loaded, session.language),
-              ...(wantWords ? { timestamps: "word" as const } : {}),
-            }),
-          );
-        } catch (error) {
-          const module = await this.#loadModule();
-          if (error instanceof module.OutputTruncated && error.partialResult !== undefined) {
-            // One piece that ran away must not cost the rest of the recording.
-            collect(error.partialResult);
-          } else if (!(error instanceof module.InputTooShort)) {
-            throw error;
-          }
-        }
-        pieceStartMs += (piece.length / SAMPLE_RATE) * 1000;
-      }
-      return { text: texts.join(" "), words };
+      const timed =
+        wantWords && !canTimeWords
+          ? await this.#transcribeWithTimingModel(session.language, speech, spans)
+          : undefined;
+      return (
+        timed ??
+        this.#transcribeSpeech(loaded, session.language, wantWords && canTimeWords, speech, spans)
+      );
     });
     this.#lastUsedAt = this.#now();
     const cleaned = text.split(/\s+/).filter(Boolean).join(" ");
@@ -294,7 +273,90 @@ export class DictationEngine {
       `transcribed ${(audio.length / SAMPLE_RATE).toFixed(1)}s of audio in ${this.#now() - started}ms`,
     );
     if (!cleaned) return { text: "", reason: "no-speech" };
-    return wantWords ? { text: cleaned, words } : { text: cleaned };
+    return words === undefined ? { text: cleaned } : { text: cleaned, words };
+  }
+
+  /**
+   * A capture needs to know when each word was said, which Canary cannot tell. The timing model
+   * then writes the transcript of that capture and is let go right after, so dictation keeps its
+   * own model. Undefined when it is missing or fails; the capture then keeps its words untimed.
+   */
+  async #transcribeWithTimingModel(
+    language: string | undefined,
+    speech: Float32Array,
+    spans: ReadonlyArray<KeptSpan>,
+  ): Promise<{ text: string; words: ReadonlyArray<TranscriptWord> } | undefined> {
+    try {
+      const path = await this.#options.resolveTimingModel?.(language);
+      if (path === undefined) {
+        this.#options.log?.("no model that can time words is installed, words stay untimed");
+        return undefined;
+      }
+      const module = await this.#loadModule();
+      const model = await module.TranscribeModel.load(path, {
+        backend: this.#options.backend ?? "auto",
+      });
+      const session = model.createSession();
+      try {
+        const loaded = { path, model, session, languages: model.capabilities.languages };
+        const result = await this.#transcribeSpeech(loaded, language, true, speech, spans);
+        if (result.words === undefined || result.words.length === 0) {
+          this.#options.log?.(`${path} timed no words, words stay untimed`);
+          return undefined;
+        }
+        return { text: result.text, words: result.words };
+      } finally {
+        session.dispose();
+        model.dispose();
+      }
+    } catch (error) {
+      this.#options.log?.(`timing words failed, words stay untimed: ${describe(error)}`);
+      return undefined;
+    }
+  }
+
+  async #transcribeSpeech(
+    loaded: LoadedModel,
+    language: string | undefined,
+    timed: boolean,
+    speech: Float32Array,
+    spans: ReadonlyArray<KeptSpan>,
+  ): Promise<{ text: string; words?: ReadonlyArray<TranscriptWord> }> {
+    const texts: Array<string> = [];
+    const words: Array<TranscriptWord> = [];
+    let pieceStartMs = 0;
+    for (const piece of splitAtPauses(speech)) {
+      const collect = (result: TranscribeCpp.Transcript) => {
+        texts.push(result.text);
+        if (!timed) return;
+        for (const word of result.words) {
+          words.push({
+            text: word.text.trim(),
+            t0: toRecordingMs(pieceStartMs + word.t0Ms, spans),
+            t1: toRecordingMs(pieceStartMs + word.t1Ms, spans),
+          });
+        }
+      };
+      try {
+        collect(
+          await loaded.session.run(piece, {
+            ...this.#runOptions(loaded, language),
+            ...(timed ? { timestamps: "word" as const } : {}),
+          }),
+        );
+      } catch (error) {
+        const module = await this.#loadModule();
+        if (error instanceof module.OutputTruncated && error.partialResult !== undefined) {
+          // One piece that ran away must not cost the rest of the recording.
+          collect(error.partialResult);
+        } else if (!(error instanceof module.InputTooShort)) {
+          throw error;
+        }
+      }
+      pieceStartMs += (piece.length / SAMPLE_RATE) * 1000;
+    }
+    const text = texts.join(" ");
+    return timed ? { text, words } : { text };
   }
 
   cancel(sessionId: string): void {

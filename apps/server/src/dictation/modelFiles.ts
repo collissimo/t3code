@@ -73,6 +73,23 @@ export function rankModels(
     .map((entry) => entry.path);
 }
 
+const installedSpeechModels = Effect.fn("dictation.installedSpeechModels")(function* (
+  directories: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const found: Array<string> = [];
+  for (const directory of directories) {
+    const names = yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => []));
+    for (const name of names) {
+      if (name.toLowerCase().endsWith(".gguf") && !VAD_MODEL.test(name)) {
+        found.push(path.join(directory, name));
+      }
+    }
+  }
+  return found;
+});
+
 /** The model file to load: `configured` when set, else the best one Hex or Scrawl installed. */
 export const findModel = Effect.fn("dictation.findModel")(function* (input: {
   readonly language: string | undefined;
@@ -90,15 +107,7 @@ export const findModel = Effect.fn("dictation.findModel")(function* (input: {
     }
     return input.configured;
   }
-  const found: Array<string> = [];
-  for (const directory of input.directories) {
-    const names = yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => []));
-    for (const name of names) {
-      if (name.toLowerCase().endsWith(".gguf") && !VAD_MODEL.test(name)) {
-        found.push(path.join(directory, name));
-      }
-    }
-  }
+  const found = yield* installedSpeechModels(input.directories);
   const [best] = rankModels(found, input.language, (file) => path.basename(file));
   if (best === undefined) {
     return yield* new DictationError({
@@ -110,6 +119,17 @@ export const findModel = Effect.fn("dictation.findModel")(function* (input: {
     });
   }
   return best;
+});
+
+/** The Parakeet model for `language`: it times words, which captures need and Canary cannot. */
+export const findTimingModel = Effect.fn("dictation.findTimingModel")(function* (input: {
+  readonly language: string | undefined;
+  readonly directories: ReadonlyArray<string>;
+}) {
+  const path = yield* Path.Path;
+  const found = yield* installedSpeechModels(input.directories);
+  const parakeet = found.filter((file) => path.basename(file).toLowerCase().startsWith("parakeet"));
+  return rankModels(parakeet, input.language, (file) => path.basename(file))[0];
 });
 
 /** The Silero model in the first folder that has one. */

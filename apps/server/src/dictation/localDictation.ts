@@ -14,7 +14,7 @@ import {
   type TranscribeModule,
   type TranscriptResult,
 } from "./DictationEngine.ts";
-import { findModel, findVadModel, modelDirectories } from "./modelFiles.ts";
+import { findModel, findTimingModel, findVadModel, modelDirectories } from "./modelFiles.ts";
 import { DEFAULT_STRUCTURE_CODEWORDS, removeFillers, splitCodeword } from "./transcriptText.ts";
 
 const IDLE_UNLOAD_MS = 15 * 60_000;
@@ -78,12 +78,20 @@ export function makeLocalDictationEngine(log: (message: string) => void): Dictat
   const resolveVadModel = Effect.fn("dictation.resolveVadModel")(function* () {
     return yield* findVadModel(modelDirectories(process.env, yield* Path.Path));
   });
+  const resolveTimingModel = Effect.fn("dictation.resolveTimingModel")(function* (
+    language: string | undefined,
+  ) {
+    const directories = modelDirectories(process.env, yield* Path.Path);
+    return yield* findTimingModel({ language, directories });
+  });
   return new DictationEngine({
     loadModule: loadTranscribeCpp,
     resolveModel: (language) =>
       Effect.runPromise(resolveModel(language).pipe(Effect.provide(NodeServices.layer))),
     resolveVadModel: () =>
       Effect.runPromise(resolveVadModel().pipe(Effect.provide(NodeServices.layer))),
+    resolveTimingModel: (language) =>
+      Effect.runPromise(resolveTimingModel(language).pipe(Effect.provide(NodeServices.layer))),
     idleUnloadMs: IDLE_UNLOAD_MS,
     backend: dictationBackend(process.env.T3CODE_DICTATION_BACKEND),
     log,
