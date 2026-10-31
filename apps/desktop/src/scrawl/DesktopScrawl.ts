@@ -273,6 +273,7 @@ const make = Effect.gen(function* () {
 
     const nativeId = (window: Electron.BrowserWindow) =>
       Number(window.getNativeWindowHandle().readBigUInt64LE() & 0xffff_ffffn);
+    const overlayIds = new Set([nativeId(inkWindow), nativeId(pill)]);
     const relative = (at: number) => at - startedAtMs;
     const watcher =
       keys === null
@@ -285,7 +286,7 @@ const make = Effect.gen(function* () {
                 Electron.screen.dipToScreenRect(null, display.bounds),
                 Electron.screen.dipToScreenRect(null, display.workArea),
               ),
-              ignoredWindowIds: [nativeId(inkWindow), nativeId(pill)],
+              ignoredWindowIds: [...overlayIds],
             },
             (message) => {
               if (message.type === "wheel") {
@@ -314,11 +315,12 @@ const make = Effect.gen(function* () {
       if (at.x < x || at.y < y || at.x >= x + width || at.y >= y + height) return;
       if (keys === null || windowAtPoint === null) return;
       const point = Electron.screen.dipToScreenPoint(at);
-      // Asking about our own window would turn on this renderer's accessibility tree.
       const window = windowAtPoint(point.x, point.y);
-      if (window === 0n || keys.getWindowThreadAndProcessId(window).processId === process.pid) {
-        return;
-      }
+      if (window === 0n) return;
+      // Asking about our own window would turn on this renderer's accessibility tree. The overlays
+      // let clicks through, so what is under them is someone else's.
+      const overlay = overlayIds.has(Number(window & 0xffff_ffffn));
+      if (!overlay && keys.getWindowThreadAndProcessId(window).processId === process.pid) return;
       current.lookups?.look(key, point.x, point.y);
     };
 
