@@ -8,12 +8,13 @@ import {
   DictationEngine,
   SAMPLE_RATE,
   decodePcm16,
+  keepSpeech,
   normalizeLanguage,
   splitAtPauses,
   type TranscribeModule,
 } from "./DictationEngine.ts";
 import { dictationBackend } from "./localDictation.ts";
-import { findModel, rankModels } from "./modelFiles.ts";
+import { findModel, findVadModel, rankModels } from "./modelFiles.ts";
 import { handleDictationWorkerRequest } from "./worker.ts";
 
 const V3 = "C:/models/parakeet-tdt-0.6b-v3-Q8_0.gguf";
@@ -39,11 +40,12 @@ describe("rankModels", () => {
   it("never gives German an English-only model", () => {
     expect(rankModels([UNIFIED_EN, V2, WHISPER_EN], "de", basename)).toEqual([]);
   });
-  it("prefers Cohere, then Canary, for the languages they know", () => {
+  it("prefers Canary, which stays quiet in pauses, and takes Cohere last", () => {
     const all = [V3, UNIFIED_EN, CANARY, COHERE];
-    expect(rankModels(all, "de", basename)).toEqual([COHERE, CANARY, V3]);
-    expect(rankModels(all, "en", basename)).toEqual([COHERE, CANARY, UNIFIED_EN, V3]);
+    expect(rankModels(all, "de", basename)).toEqual([CANARY, V3, COHERE]);
+    expect(rankModels(all, "en", basename)).toEqual([CANARY, UNIFIED_EN, V3, COHERE]);
     expect(rankModels(all, "sv", basename)).toEqual([CANARY, V3]);
+    expect(rankModels(all, "ja", basename)).toEqual([COHERE]);
   });
   it("puts models that detect the language first when none is given", () => {
     expect(rankModels([COHERE, V3], undefined, basename)).toEqual([V3, COHERE]);
@@ -72,6 +74,24 @@ describe("findModel", () => {
       expect(yield* findModel({ language: "en", configured: undefined, directories })).toBe(
         path.join(hex, "parakeet-unified-en-0.6b-Q8_0.gguf"),
       );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the voice activity model apart from the speech models", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const silero = path.join(directory, "silero-vad-v6.2-F32.gguf");
+      yield* fs.writeFileString(silero, "");
+      const error = yield* findModel({
+        language: "en",
+        configured: undefined,
+        directories: [directory],
+      }).pipe(Effect.flip);
+      expect(error.reason).toContain("No speech model");
+      expect(yield* findVadModel([path.join(directory, "missing"), directory])).toBe(silero);
+      expect(yield* findVadModel([path.join(directory, "missing")])).toBeUndefined();
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -105,6 +125,17 @@ describe("audio input", () => {
     expect(pieces.reduce((sum, piece) => sum + piece.length, 0)).toBe(audio.length);
     expect(splitAtPauses(speech(35))).toHaveLength(1);
   });
+  it("keeps speech and cuts the pauses between it down to a short gap", () => {
+    const audio = new Float32Array(10 * SAMPLE_RATE).fill(0.5);
+    const kept = keepSpeech(audio, [
+      { startSample: SAMPLE_RATE, endSample: 2 * SAMPLE_RATE },
+      { startSample: 2.1 * SAMPLE_RATE, endSample: 3 * SAMPLE_RATE },
+      { startSample: 9 * SAMPLE_RATE, endSample: 10 * SAMPLE_RATE },
+    ]);
+    // 2.9 s of speech, the whole 0.1 s gap, and 0.4 s of the 6 s pause.
+    expect(kept.length).toBe(Math.round(3.4 * SAMPLE_RATE));
+    expect(keepSpeech(audio, [])).toHaveLength(0);
+  });
   it("reads the backend from the environment, auto when unset or unknown", () => {
     expect(dictationBackend(" CPU ")).toBe("cpu");
     expect(dictationBackend("vulkan")).toBe("vulkan");
@@ -121,6 +152,10 @@ describe("audio input", () => {
 
 class FakeModel {
   static loads: Array<string> = [];
+  static vadSegments: ReadonlyArray<{ startSample: number; endSample: number }> = [];
+  static runError: Error | undefined;
+  static runLengths: Array<number> = [];
+  static vadDisposed = 0;
   runs: Array<{ length: number; language: string | undefined }> = [];
   disposed = false;
   readonly backend = "CPU";
@@ -133,9 +168,19 @@ class FakeModel {
     return {
       run: async (pcm: Float32Array, opts: { language?: string }) => {
         this.runs.push({ length: pcm.length, language: opts.language });
+        FakeModel.runLengths.push(pcm.length);
+        if (FakeModel.runError !== undefined) throw FakeModel.runError;
         return { text: "  Hallo   Welt ", aborted: false };
       },
       dispose: () => undefined,
+    };
+  }
+  createVadSession() {
+    return {
+      run: async () => ({ segments: FakeModel.vadSegments }),
+      dispose: () => {
+        FakeModel.vadDisposed++;
+      },
     };
   }
   dispose() {
@@ -143,13 +188,25 @@ class FakeModel {
   }
 }
 
-const fakeModule = { TranscribeModel: FakeModel, InputTooShort: class extends Error {} };
+class FakeOutputTruncated extends Error {
+  partialResult = { text: "Bis hier" };
+}
 
-const makeEngine = (resolveModel = async () => "model.gguf") => {
+const fakeModule = {
+  TranscribeModel: FakeModel,
+  InputTooShort: class extends Error {},
+  OutputTruncated: FakeOutputTruncated,
+};
+
+const makeEngine = (
+  resolveModel = async () => "model.gguf",
+  resolveVadModel?: () => Promise<string | undefined>,
+) => {
   let now = 0;
   const engine = new DictationEngine({
     loadModule: async () => fakeModule as unknown as TranscribeModule,
     resolveModel,
+    ...(resolveVadModel ? { resolveVadModel } : {}),
     idleUnloadMs: 60_000,
     now: () => now,
   });
@@ -186,6 +243,60 @@ describe("DictationEngine", () => {
     engine.append("short", "de", speech(0.1));
     expect(await engine.finish("short")).toEqual({ text: "", reason: "no-speech" });
     expect(await engine.finish("never-started")).toEqual({ text: "", reason: "no-speech" });
+  });
+
+  it("only sends what the voice activity model marks as speech", async () => {
+    FakeModel.runLengths = [];
+    FakeModel.vadSegments = [{ startSample: 0, endSample: SAMPLE_RATE }];
+    const { engine } = makeEngine(undefined, async () => "silero.gguf");
+    engine.append("a", "de", speech(30));
+    expect(await engine.finish("a")).toEqual({ text: "Hallo Welt" });
+    expect(FakeModel.runLengths).toEqual([SAMPLE_RATE]);
+  });
+
+  it("does not ask the model when nothing was said", async () => {
+    FakeModel.runLengths = [];
+    FakeModel.vadSegments = [];
+    const { engine } = makeEngine(undefined, async () => "silero.gguf");
+    engine.append("a", "de", speech(30));
+    expect(await engine.finish("a")).toEqual({ text: "", reason: "no-speech" });
+    expect(FakeModel.runLengths).toEqual([]);
+  });
+
+  it("keeps the audio as it is without a voice activity model", async () => {
+    FakeModel.runLengths = [];
+    const { engine } = makeEngine(undefined, async () => undefined);
+    engine.append("a", "de", speech(3));
+    await engine.finish("a");
+    expect(FakeModel.runLengths).toEqual([3 * SAMPLE_RATE]);
+  });
+
+  it("keeps the rest of the recording when a piece stops on repeated text", async () => {
+    FakeModel.runError = new FakeOutputTruncated();
+    try {
+      const { engine } = makeEngine();
+      engine.append("long", "de", speech(40));
+      expect(await engine.finish("long")).toEqual({ text: "Bis hier Bis hier" });
+    } finally {
+      FakeModel.runError = undefined;
+    }
+  });
+
+  it("looks for the voice activity model again after letting go of the models", async () => {
+    FakeModel.vadDisposed = 0;
+    FakeModel.vadSegments = [{ startSample: 0, endSample: SAMPLE_RATE }];
+    let resolved = 0;
+    const { engine } = makeEngine(undefined, async () => {
+      resolved++;
+      return "silero.gguf";
+    });
+    engine.append("a", "de", speech(1));
+    await engine.finish("a");
+    await engine.dispose();
+    expect(FakeModel.vadDisposed).toBe(1);
+    engine.append("b", "de", speech(1));
+    await engine.finish("b");
+    expect(resolved).toBe(2);
   });
 
   it("fails the next append when no model can be loaded, and tries again on a new recording", async () => {

@@ -18,19 +18,18 @@ export function modelDirectories(env: NodeJS.ProcessEnv, path: Path.Path): Reado
 
 const EUROPEAN = "bg hr cs da nl en et fi fr de el hu it lv lt mt pl pt ro sk sl es sv ru uk";
 
+const VAD_MODEL = /^silero.*\.gguf$/i;
+
 /**
- * Models known by file name, best first, with the languages they transcribe. On German speech
- * (Multilingual LibriSpeech) Cohere Transcribe misses 4% of the words, Canary 1B v2 7%, Parakeet
- * v3 14%. Cohere and Canary cannot detect the language; the client always sends one.
+ * Known models, best first. Behind the Silero gate all three get about 13% of real German dictation
+ * wrong, but only Canary 1B v2 writes nothing for room tone without it, so noise that slips through
+ * stays harmless; Cohere invents the most. Cohere and Canary cannot detect the language, so the
+ * client always sends one.
  */
 const KNOWN_MODELS: ReadonlyArray<{
   readonly matches: (name: string) => boolean;
   readonly languages: ReadonlyArray<string> | "any";
 }> = [
-  {
-    matches: (name) => name.startsWith("cohere-transcribe") && !name.includes("arabic"),
-    languages: "en fr de es it pt nl pl el ar ja zh vi ko".split(" "),
-  },
   { matches: (name) => name.startsWith("canary-1b-v2"), languages: EUROPEAN.split(" ") },
   { matches: (name) => name.startsWith("parakeet-unified-en"), languages: ["en"] },
   {
@@ -38,6 +37,10 @@ const KNOWN_MODELS: ReadonlyArray<{
     languages: EUROPEAN.split(" "),
   },
   { matches: (name) => name.startsWith("parakeet"), languages: ["en"] },
+  {
+    matches: (name) => name.startsWith("cohere-transcribe") && !name.includes("arabic"),
+    languages: "en fr de es it pt nl pl el ar ja zh vi ko".split(" "),
+  },
   { matches: (name) => name.includes("whisper") && /[.-]en[.-]/.test(name), languages: ["en"] },
   { matches: (name) => name.includes("whisper"), languages: "any" },
 ];
@@ -91,7 +94,9 @@ export const findModel = Effect.fn("dictation.findModel")(function* (input: {
   for (const directory of input.directories) {
     const names = yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => []));
     for (const name of names) {
-      if (name.toLowerCase().endsWith(".gguf")) found.push(path.join(directory, name));
+      if (name.toLowerCase().endsWith(".gguf") && !VAD_MODEL.test(name)) {
+        found.push(path.join(directory, name));
+      }
     }
   }
   const [best] = rankModels(found, input.language, (file) => path.basename(file));
@@ -105,4 +110,18 @@ export const findModel = Effect.fn("dictation.findModel")(function* (input: {
     });
   }
   return best;
+});
+
+/** The Silero model in the first folder that has one. */
+export const findVadModel = Effect.fn("dictation.findVadModel")(function* (
+  directories: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  for (const directory of directories) {
+    const names = yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => []));
+    const name = names.toSorted().find((candidate) => VAD_MODEL.test(candidate));
+    if (name !== undefined) return path.join(directory, name);
+  }
+  return undefined;
 });

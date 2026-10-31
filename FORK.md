@@ -119,11 +119,15 @@ can be rebound in Settings → Keybindings ("Composer: Dictate").
   [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (`transcribe-cpp` npm
   package). Nothing is downloaded; the best `.gguf` found is used, from
   `~/.t3/dictation/models` (`$T3CODE_HOME/dictation/models`; not `--home-dir`), Scrawl (`%LOCALAPPDATA%\Scrawl\models`) or Hex
-  (`%APPDATA%\voice-control\models`). Best first: Cohere Transcribe 03-2026, Canary 1B v2,
-  Parakeet TDT 0.6b v3 (on German speech they miss about 4%, 7% and 14% of the words).
+  (`%APPDATA%\voice-control\models`). Best first: Canary 1B v2, Parakeet TDT 0.6b v3, Cohere
+  Transcribe 03-2026. On real German dictation all three get about 13% of the words wrong; Canary
+  invents the least in thinking pauses.
   `T3CODE_DICTATION_MODEL=<path to .gguf>` picks one. Without Scrawl or Hex,
   `fork/install-parakeet.ps1` downloads Parakeet into Scrawl's folder; the others come from
   [huggingface.co/handy-computer](https://huggingface.co/handy-computer) (the `Q8_0` file).
+- Thinking pauses never reach the speech model when `silero-vad-v6.2-F32.gguf` lies in one of
+  those folders ([download](https://huggingface.co/handy-computer/silero-vad-v6.2-gguf)): only
+  what Silero marks as speech is transcribed. Without it the log says so and pauses go through.
 - It runs on the GPU when there is one (Vulkan; the log says `loaded … on Vulkan0`), about five
   times faster than the CPU. `T3CODE_DICTATION_BACKEND=cpu` keeps it on the CPU.
 - Long recordings are transcribed in pieces of at most 35 seconds, cut at pauses.
