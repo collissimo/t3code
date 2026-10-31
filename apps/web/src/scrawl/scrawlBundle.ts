@@ -9,10 +9,12 @@ import {
   type ScrawlStroke,
 } from "@t3tools/contracts";
 
+import { groupMarks, placeMarks } from "./markGroups";
+import { marksOf } from "./markShapes";
 import {
+  budgetFor,
   buildNarration,
   formatNarrationLine,
-  type CaptureMark,
   type NarrationLine,
   type TimedWord,
 } from "./narration";
@@ -20,7 +22,6 @@ import { withoutInkChanges } from "./sceneChanges";
 
 const SHEET_LONG_EDGE = 1600;
 const SHEET_GUTTER = 6;
-const STROKE_GROUP_MS = 1_500;
 const CROP_PADDING = 0.08;
 // Cropping to most of the screen only loses context.
 const MAX_CROP_AREA = 0.7;
@@ -41,13 +42,6 @@ export interface CaptureRecording {
   readonly durationMs: number;
   readonly sceneChanges: ReadonlyArray<number>;
   readonly wav: Uint8Array;
-}
-
-interface ManifestMark extends CaptureMark {
-  readonly strokes: ReadonlyArray<number>;
-  readonly boxNorm: readonly [number, number, number, number];
-  readonly shape: string;
-  readonly description: string;
 }
 
 // Scrawl stores flat [x, y, dt] triples with positions in 0..=10000.
@@ -79,33 +73,6 @@ export interface BuiltBundle {
   readonly contactSheet: Blob;
   readonly lines: ReadonlyArray<NarrationLine>;
 }
-
-const strokesToMarks = (strokes: ReadonlyArray<ScrawlStroke>): Array<ManifestMark> => {
-  const groups: Array<{ t0: number; t1: number; strokes: Array<number> }> = [];
-  strokes.forEach((stroke, index) => {
-    const open = groups.at(-1);
-    if (open !== undefined && stroke.t0 - open.t1 <= STROKE_GROUP_MS) {
-      open.t1 = stroke.t1;
-      open.strokes.push(index);
-    } else {
-      groups.push({ t0: stroke.t0, t1: stroke.t1, strokes: [index] });
-    }
-  });
-  return groups.map((group, index) => {
-    const xs: Array<number> = [];
-    const ys: Array<number> = [];
-    for (const strokeIndex of group.strokes) {
-      strokes[strokeIndex]!.points.forEach((value, at) => (at % 2 === 0 ? xs : ys).push(value));
-    }
-    return {
-      id: `m${index + 1}`,
-      ...group,
-      boxNorm: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
-      shape: "mark",
-      description: `marked (${group.strokes.length} ${group.strokes.length === 1 ? "stroke" : "strokes"})`,
-    };
-  });
-};
 
 /** Everything the hand touched, padded, or null when that is most of the screen anyway. */
 function activityBox(recording: Pick<CaptureRecording, "input">): {
@@ -206,6 +173,33 @@ const drawClickRings = (
   }
 };
 
+/** A group's earlier ink has faded from the video by the time its keyframe is taken. */
+const drawMarkInk = (
+  context: CanvasRenderingContext2D,
+  line: NarrationLine,
+  marks: ReadonlyArray<{ readonly id: string; readonly strokes: ReadonlyArray<number> }>,
+  strokes: ReadonlyArray<ScrawlStroke>,
+  width: number,
+  height: number,
+) => {
+  context.strokeStyle = "#ff2d2d";
+  context.lineWidth = Math.max(3, width / 640);
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  for (const action of line.actions) {
+    if (action.kind !== "mark") continue;
+    const mark = marks.find((candidate) => candidate.id === action.id);
+    for (const strokeIndex of mark?.strokes ?? []) {
+      const { points } = strokes[strokeIndex]!;
+      context.beginPath();
+      for (let index = 0; index + 1 < points.length; index += 2) {
+        context.lineTo(points[index]! * width, points[index + 1]! * height);
+      }
+      context.stroke();
+    }
+  }
+};
+
 const drawChip = (context: CanvasRenderingContext2D, label: string, height: number) => {
   // Blind reading tests in Scrawl: the number needs its own white square to be read as a number.
   const size = Math.max(24, height / 18);
@@ -287,13 +281,21 @@ export async function buildBundle(
     t0: shift(stroke.t0),
     t1: shift(stroke.t1),
   }));
-  const marks = strokesToMarks(strokes);
+  const marks = marksOf(strokes, recording.session.width, recording.session.height);
+  const sceneChanges = withoutInkChanges(recording.sceneChanges, strokes, SCRAWL_INK_HOLD_MS);
   const lines = buildNarration({
     words: recording.words,
     events,
     marks,
     durationMs: recording.durationMs,
-    sceneChanges: withoutInkChanges(recording.sceneChanges, strokes, SCRAWL_INK_HOLD_MS),
+    sceneChanges,
+    markGroups: groupMarks(marks, {
+      actionTimes: events.flatMap((event) =>
+        event.kind === "click" || event.kind === "drag" ? [event.t] : [],
+      ),
+      sceneChanges,
+      budget: budgetFor(recording.durationMs),
+    }).map((group) => group.map((mark) => mark.id)),
   });
   const box = activityBox({ input: { events, strokes } });
 
@@ -311,6 +313,7 @@ export async function buildBundle(
       const context = full.getContext("2d")!;
       context.drawImage(video, 0, 0);
       drawClickRings(context, line, full.width, full.height);
+      drawMarkInk(context, line, marks, strokes, full.width, full.height);
       const name = `frame-${String(index + 1).padStart(2, "0")}.png`;
       if (box === null) {
         await write(`frames/${name}`, await bytesOf(await toBlob(full)));
@@ -367,17 +370,22 @@ export async function buildBundle(
       words: recording.words,
     },
     strokes: strokes.map((stroke) => manifestStroke(stroke, width, height)),
-    marks,
+    marks: placeMarks(marks, lines),
     events: events.map((event) => (event.kind === "click" ? { ...event, button: "left" } : event)),
     keyframes: lines.map((line, index) => {
-      const main = line.actions.find((action) => action.kind === "mark") ?? line.actions.at(-1);
+      const drawn = line.actions.filter((action) => action.kind === "mark");
+      const main = drawn[0] ?? line.actions.at(-1);
       return {
         index: index + 1,
         t: Math.round(line.frameT),
         reason: main === undefined ? "speech" : KEYFRAME_REASONS[main.kind],
         file: `frames/frame-${String(index + 1).padStart(2, "0")}.png`,
-        event: main?.kind ?? "speech",
+        event:
+          drawn.length > 0
+            ? drawn.map(({ id }) => marks.find((mark) => mark.id === id)?.description).join("; ")
+            : (main?.kind ?? "speech"),
         said: line.text,
+        ...(drawn[0] === undefined ? {} : { markId: drawn[0].id }),
       };
     }),
     contactSheet: "contact-sheet.png",

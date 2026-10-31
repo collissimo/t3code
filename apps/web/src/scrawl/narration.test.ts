@@ -129,6 +129,48 @@ describe("buildNarration", () => {
     expect(formatNarrationLine(lines.at(-1)!, 1)).toBe("- #2 (0:20) clicked");
   });
 
+  it("draws a group of marks on one keyframe, numbered, without cutting a sentence", () => {
+    const words = [
+      ...say("Erst etwas Einleitung.", 0),
+      ...say("Dieses Feld hier soll weg.", 2_000),
+      ...say("Und dann noch dieser.", 5_000),
+      ...say("Das hier auch noch.", 7_000),
+    ];
+    const lines = buildNarration({
+      words,
+      events: [{ kind: "click", t: 12_000, x: 0.5, y: 0.5 }],
+      marks: [
+        { id: "m1", t0: 2_200, t1: 2_800, shape: "circle" },
+        { id: "m2", t0: 3_000, t1: 3_200, shape: "underline", strokes: [1, 2] },
+        { id: "m3", t0: 7_200, t1: 7_800, shape: "arrow" },
+      ],
+      durationMs: 14_000,
+      sceneChanges: [4_000],
+      markGroups: [["m1", "m2", "m3"]],
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.frameT).toBe(7_800);
+    expect(lines[0]!.text).toBe(words.map((word) => word.text).join(" "));
+    expect(formatNarrationLine(lines[0]!, 0)).toBe(
+      [
+        "- #1 (0:07) “Erst etwas Einleitung.”",
+        "  ✎① 0:02 circled",
+        "  ✎② 0:03 underlined (2 strokes) “Dieses Feld hier soll weg. Und dann noch dieser.”",
+        "  ✎③ 0:07 drew an arrow “Das hier auch noch.”",
+      ].join("\n"),
+    );
+  });
+
+  it("names a lone mark by its shape and leaves it unnumbered", () => {
+    const lines = buildNarration({
+      words: say("Das hier.", 0),
+      events: [],
+      marks: [{ id: "m1", t0: 100, t1: 300, shape: "circle" }],
+      durationMs: 2_000,
+    });
+    expect(formatNarrationLine(lines[0]!, 0)).toBe("- #1 (0:00) [circled] “Das hier.”");
+  });
+
   it("keeps every mark over budget, and speech ahead of the first keyframe with it", () => {
     const marks = Array.from({ length: 9 }, (_, index) => ({
       id: `m${index}`,

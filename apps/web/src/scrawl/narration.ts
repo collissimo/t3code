@@ -27,6 +27,17 @@ export interface CaptureMark {
   readonly t0: number;
   readonly t1: number;
   readonly shape?: string;
+  readonly strokes?: ReadonlyArray<number>;
+}
+
+export interface MarkAction {
+  readonly kind: "mark";
+  readonly t0: number;
+  readonly t1: number;
+  readonly id: string;
+  readonly text: string;
+  /** Its place in drawing order, when the keyframe draws several marks. */
+  readonly number?: number;
 }
 
 export type NarrationAction =
@@ -41,7 +52,7 @@ export type NarrationAction =
     }
   | { readonly kind: "drag"; readonly t0: number; readonly t1: number; readonly direction: string }
   | { readonly kind: "scroll"; readonly t0: number; readonly t1: number }
-  | { readonly kind: "mark"; readonly t0: number; readonly t1: number; readonly id: string }
+  | MarkAction
   | { readonly kind: "scene"; readonly t0: number; readonly t1: number };
 
 export interface NarrationLine {
@@ -51,6 +62,11 @@ export interface NarrationLine {
   readonly frameT: number;
   readonly text: string;
   readonly actions: ReadonlyArray<NarrationAction>;
+  /** Whole sentences, with the marks drawn over each. */
+  readonly sentences: ReadonlyArray<{
+    readonly text: string;
+    readonly marks: ReadonlyArray<MarkAction>;
+  }>;
 }
 
 interface Sentence {
@@ -73,7 +89,7 @@ const SHORT_DRAG = 0.15;
 const ATTACH_MS = 3_000;
 const SETTLE_MS = 300;
 // Scrawl's keyframe budget: each image costs a reading model about 1.5k tokens.
-const budgetFor = (durationMs: number) =>
+export const budgetFor = (durationMs: number) =>
   Math.min(12, 6 + Math.max(0, Math.ceil((durationMs - 40_000) / 20_000)));
 const COVERAGE_MS = 35_000;
 const COVERAGE_WORDS = 100;
@@ -122,6 +138,20 @@ export function splitSentences(words: ReadonlyArray<TimedWord>): Array<Sentence>
   return sentences;
 }
 
+const MARK_VERBS: Record<string, string> = {
+  circle: "circled",
+  underline: "underlined",
+  line: "drew a line",
+  arrow: "drew an arrow",
+  tap: "tapped",
+};
+
+const markText = ({ shape, strokes }: CaptureMark) => {
+  const verb = (shape === undefined ? undefined : MARK_VERBS[shape]) ?? "marked";
+  const count = strokes?.length ?? 1;
+  return count > 1 ? `${verb} (${count} strokes)` : verb;
+};
+
 const directionOf = (dx: number, dy: number) =>
   Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? "left" : "right") : dy < 0 ? "up" : "down";
 
@@ -134,6 +164,7 @@ export function foldActions(
     t0: mark.t0,
     t1: mark.t1,
     id: mark.id,
+    text: markText(mark),
   }));
   const bursts: Array<{
     t0: number;
@@ -198,13 +229,36 @@ const attach = (sentences: Array<Sentence>, actions: ReadonlyArray<NarrationActi
 const scoreOf = (sentence: Sentence) =>
   sentence.actions.reduce((best, action) => Math.max(best, SCORES[action.kind]), 0);
 
+/** Sentences inside a group of marks: its keyframe starts earlier and nothing cuts into it. */
+const insideMarkGroups = (
+  sentences: ReadonlyArray<Sentence>,
+  markGroups: ReadonlyArray<ReadonlyArray<string>>,
+) => {
+  const inside = new Set<number>();
+  for (const ids of markGroups) {
+    const holding = sentences.flatMap((sentence, index) =>
+      sentence.actions.some((action) => action.kind === "mark" && ids.includes(action.id))
+        ? [index]
+        : [],
+    );
+    for (let index = (holding[0] ?? 0) + 1; index <= (holding.at(-1) ?? -1); index++) {
+      inside.add(index);
+    }
+  }
+  return inside;
+};
+
 /** The sentences that own a keyframe: every mark, then the strongest actions, then long stretches. */
-const chooseFrameOwners = (sentences: ReadonlyArray<Sentence>, durationMs: number) => {
+const chooseFrameOwners = (
+  sentences: ReadonlyArray<Sentence>,
+  durationMs: number,
+  inside: ReadonlySet<number>,
+) => {
   const budget = budgetFor(durationMs);
   const owners = new Set<number>();
   const ranked = sentences
     .map((sentence, index) => ({ index, score: scoreOf(sentence) }))
-    .filter((entry) => entry.score > 0)
+    .filter((entry) => entry.score > 0 && !inside.has(entry.index))
     .sort((a, b) => b.score - a.score || a.index - b.index);
   for (const { index, score } of ranked) {
     if (score >= SCORES.mark || owners.size < budget) owners.add(index);
@@ -221,7 +275,7 @@ const chooseFrameOwners = (sentences: ReadonlyArray<Sentence>, durationMs: numbe
       }
       stretchWords += sentence.words.length;
       const long = sentence.t1 - stretchStart > COVERAGE_MS || stretchWords > COVERAGE_WORDS;
-      if (long && owners.size < budget) {
+      if (long && owners.size < budget && !inside.has(index)) {
         owners.add(index);
         stretchStart = sentence.t0;
         stretchWords = sentence.words.length;
@@ -267,6 +321,8 @@ export function buildNarration(input: {
   readonly durationMs: number;
   /** When the screen changed; without it clicks are taken at face value. */
   readonly sceneChanges?: ReadonlyArray<number>;
+  /** Mark ids that share one keyframe; without it each sentence with a mark has its own. */
+  readonly markGroups?: ReadonlyArray<ReadonlyArray<string>>;
 }): Array<NarrationLine> {
   const sentences = splitSentences(input.words);
   const folded = foldActions(input.events, input.marks);
@@ -277,9 +333,13 @@ export function buildNarration(input: {
   // Nothing said, done or changed: the picture is still what the capture shows.
   if (sentences.length === 0) {
     const frameT = input.durationMs / 2;
-    return [{ t0: 0, t1: input.durationMs, frameT, text: "", actions: [] }];
+    return [{ t0: 0, t1: input.durationMs, frameT, text: "", actions: [], sentences: [] }];
   }
-  const owners = chooseFrameOwners(sentences, input.durationMs);
+  const owners = chooseFrameOwners(
+    sentences,
+    input.durationMs,
+    insideMarkGroups(sentences, input.markGroups ?? []),
+  );
   const groups: Array<Array<Sentence>> = [];
   let ownerSeen = false;
   sentences.forEach((sentence, index) => {
@@ -290,7 +350,15 @@ export function buildNarration(input: {
     ownerSeen ||= owner;
   });
   return groups.map((group) => {
-    const actions = group.flatMap((sentence) => sentence.actions);
+    const drawn = group
+      .flatMap((sentence) => sentence.actions)
+      .filter((action) => action.kind === "mark")
+      .toSorted((a, b) => a.t0 - b.t0);
+    const numbered = (action: NarrationAction): NarrationAction =>
+      action.kind === "mark" && drawn.length > 1
+        ? { ...action, number: drawn.findIndex((mark) => mark.id === action.id) + 1 }
+        : action;
+    const actions = group.flatMap((sentence) => sentence.actions).map(numbered);
     const t0 = group[0]!.t0;
     return {
       t0,
@@ -298,23 +366,27 @@ export function buildNarration(input: {
       frameT: frameTimeOf(t0, actions, input.durationMs),
       text: group.flatMap((sentence) => sentence.words).join(" "),
       actions,
+      sentences: group.map((sentence) => ({
+        text: sentence.words.join(" "),
+        marks: sentence.actions.map(numbered).filter((action) => action.kind === "mark"),
+      })),
     };
   });
 }
 
 const formatClock = (ms: number) => {
-  const seconds = Math.round(ms / 1000);
+  const seconds = Math.floor(ms / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
 const describeActions = (actions: ReadonlyArray<NarrationAction>) => {
-  let marks = 0;
+  const marks: Array<string> = [];
   let clicks = 0;
   let pointed = 0;
   let scrolled = false;
   const drags = new Set<string>();
   for (const action of actions) {
-    if (action.kind === "mark") marks++;
+    if (action.kind === "mark") marks.push(action.text);
     else if (action.kind === "clicks") {
       if (action.changed === false) pointed += action.count;
       else clicks += action.count;
@@ -323,7 +395,7 @@ const describeActions = (actions: ReadonlyArray<NarrationAction>) => {
   }
   const counted = (word: string, count: number) => (count > 1 ? `${word} ×${count}` : word);
   return [
-    marks > 0 ? counted("marked", marks) : null,
+    ...marks,
     clicks > 0 ? counted("clicked", clicks) : null,
     pointed > 0 ? counted("pointed", pointed) : null,
     ...[...drags].map((direction) => `dragged ${direction}`),
@@ -333,9 +405,38 @@ const describeActions = (actions: ReadonlyArray<NarrationAction>) => {
     .join(", ");
 };
 
+const CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳";
+
+const markLabel = (mark: MarkAction) => {
+  const number = mark.number === undefined ? "" : (CIRCLED[mark.number - 1] ?? `(${mark.number})`);
+  return `✎${number} ${formatClock(mark.t0)} ${mark.text}`;
+};
+
+/**
+ * Several marks on a keyframe: each starts a line with the whole sentences said from it on, as
+ * Scrawl's agent text does, so "this one" reads next to the number. The image only shows ink.
+ */
+const formatNumberedMarks = (head: string, line: NarrationLine) => {
+  const others = describeActions(line.actions.filter((action) => action.kind !== "mark"));
+  const lead: Array<string> = [];
+  const marked: Array<{ readonly label: string; readonly said: Array<string> }> = [];
+  for (const sentence of line.sentences) {
+    for (const mark of sentence.marks) marked.push({ label: markLabel(mark), said: [] });
+    if (sentence.text !== "") (marked.at(-1)?.said ?? lead).push(sentence.text);
+  }
+  const quoted = (said: ReadonlyArray<string>) => (said.length > 0 ? ` “${said.join(" ")}”` : "");
+  return [
+    `${head}${others === "" ? "" : ` [${others}]`}${quoted(lead)}`,
+    ...marked.map(({ label, said }) => `  ${label}${quoted(said)}`),
+  ].join("\n");
+};
+
 /** `- #2 (0:09) [clicked ×3] “…”`: the shape Scrawl pastes, which agents and skills already read. */
 export function formatNarrationLine(line: NarrationLine, index: number): string {
   const head = `- #${index + 1} (${formatClock(line.frameT)})`;
+  if (line.actions.filter((action) => action.kind === "mark").length > 1) {
+    return formatNumberedMarks(head, line);
+  }
   const actions = describeActions(line.actions);
   if (line.text === "") {
     const shown = line.actions.length > 0 ? "screen changed" : "nothing said or done";

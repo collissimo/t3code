@@ -165,6 +165,14 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 - Speech and pointing do not run in step, so sentences are never cut at a click: whole sentences
   own a keyframe, click bursts fold into one (`clicked ×3`), and clicks the screen did not answer
   read as `pointed`. On 32 real captures this took cuts through sentences from 59 of 127 lines to 1.
+- Ink is recognised with Scrawl's rules (`circled`, `underlined`, `drew a line`, `drew an arrow`,
+  else `marked`; `scrawl.json` has `shape`, `from`, `to`). Marks drawn on one screen share a keyframe
+  that draws all their ink, until a click or drag, a scene change, 20 s or 12 strokes. Several on a
+  keyframe are numbered in drawing order in the text and `scrawl.json` (`✎① 0:06 circled “…”`), never
+  on the image. No mark is dropped; over the keyframe budget, neighbouring groups merge. On Scrawl's
+  43 captures all 124 ink marks get the shape and box of Scrawl's current `sketch.rs`. Scrawl compares
+  the screen around the ink, but here the video shows the ink, so scene changes decide "same screen".
+  The laser and pins are not here: Scrawl's Windows build records no laser and Shift+move is the ink.
 - Uses the dictation model above, with word times mapped back across the pauses it cuts out.
 - The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
   not keep it out on Windows 10 22H2.
