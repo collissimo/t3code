@@ -228,6 +228,7 @@ import { importComposerThreadAttachment } from "./composerThreadImport";
 import { observeResize } from "~/lib/observeResize";
 
 const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
+import { markDictatedText } from "@t3tools/client-runtime/voice-input/dictationMarker";
 import { useDictation } from "../../dictation/useDictation";
 import { ComposerDictationButton } from "./ComposerDictationButton";
 import { toastManager } from "../ui/toast";
@@ -2474,7 +2475,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // thread may belong to. The desktop app transcribes on this computer either way.
     transcriptionEnvironmentId: primaryEnvironmentId ?? environmentId,
     insert: (text) =>
-      insertComposerTextStable(`${text} `, "cursor", { ensureLeadingBoundary: true }),
+      insertComposerTextStable(`${markDictatedText(promptRef.current, text)} `, "cursor", {
+        ensureLeadingBoundary: true,
+      }),
   });
   const toggleDictationStable = useStableCallback(dictation.toggle);
   const cancelDictationStable = useStableCallback(dictation.cancel);

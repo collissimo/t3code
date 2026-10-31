@@ -1,4 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { markDictatedText } from "@t3tools/client-runtime/voice-input/dictationMarker";
 import type {
   DesktopDictationOutcome,
   DictationAppendInput,
@@ -102,6 +103,7 @@ export function useDictation(input: {
   const unstructuredRef = useRef<string | null>(null);
   const inputRef = useRef(input);
   const languageRef = useRef(language);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- gives the send timer and async steps the latest props
   useEffect(() => {
     inputRef.current = input;
     languageRef.current = language;
@@ -279,7 +281,7 @@ export function useDictation(input: {
       );
       return;
     }
-    void navigator.clipboard?.writeText(text);
+    void navigator.clipboard?.writeText(markDictatedText("", text));
     notify(
       {
         text: "The composer cannot take text right now · copied to the clipboard",
@@ -323,6 +325,7 @@ export function useDictation(input: {
     return false;
   };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the microphone and timers until unmount
   useEffect(
     () => () => {
       // Leaving the composer (another thread, unmount) ends a recording without inserting it.

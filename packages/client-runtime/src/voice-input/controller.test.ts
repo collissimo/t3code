@@ -86,8 +86,8 @@ describe("resolveTranscriptCommit", () => {
 
     expect(resolveTranscriptCommit(captured, captured, "use the mobile skill", "en-US")).toEqual({
       kind: "commit",
-      text: "Fix 🧪 then use the mobile skill please",
-      selection: { start: tokenStart + "use the mobile skill".length, end: tokenStart + 20 },
+      text: "Fix 🧪 then [STT] use the mobile skill please",
+      selection: { start: tokenStart + 26, end: tokenStart + 26 },
     });
   });
 
@@ -201,14 +201,14 @@ describe("VoiceInputController", () => {
       if (changeDuring === "recording") selected = second;
       await harness.controller.stop();
 
-      expect(harness.commits.map((commit) => commit.text)).toEqual(["hello first choice"]);
+      expect(harness.commits.map((commit) => commit.text)).toEqual(["hello [STT] first choice"]);
 
       await harness.controller.start();
       await harness.controller.stop();
 
       expect(harness.commits.map((commit) => commit.text)).toEqual([
-        "hello first choice",
-        "hello second choice",
+        "hello [STT] first choice",
+        "hello [STT] second choice",
       ]);
       expect(preparationSignals).toHaveLength(2);
       expect(transcriptionSignals).toHaveLength(2);
@@ -235,7 +235,7 @@ describe("VoiceInputController", () => {
     await stopping;
 
     expect(harness.commits).toEqual([
-      { text: "hello new text", selection: { start: 14, end: 14 } },
+      { text: "hello [STT] new text", selection: { start: 20, end: 20 } },
     ]);
     expect(harness.deleted).toEqual(["file:///voice.m4a"]);
   });
@@ -456,7 +456,7 @@ describe("VoiceInputController", () => {
     await harness.controller.stop();
 
     expect(harness.commits).toEqual([
-      { text: "hello new text", selection: { start: 14, end: 14 } },
+      { text: "hello [STT] new text", selection: { start: 20, end: 20 } },
     ]);
     expect(harness.controller.currentState.phase).toBe("idle");
   });

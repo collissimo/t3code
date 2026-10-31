@@ -131,6 +131,10 @@
       "types": "./src/voice-input/index.ts",
       "default": "./src/voice-input/index.ts"
     },
+    "./voice-input/dictationMarker": {
+      "types": "./src/voice-input/dictationMarker.ts",
+      "default": "./src/voice-input/dictationMarker.ts"
+    },
     "./t3ToolSummary": {
       "types": "./src/t3ToolSummary.ts",
       "default": "./src/t3ToolSummary.ts"
