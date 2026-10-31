@@ -66,12 +66,13 @@ export function ComposerDictationButton(props: {
         .join(" · ");
 
   return (
-    <div className="relative flex items-center">
+    <div className="flex items-center">
       {status !== null || notice !== null ? (
+        // Positioned against the composer footer, so it stays inside the composer at any width.
         <div
           role="status"
           aria-live="polite"
-          className="pointer-events-none absolute right-0 bottom-full z-20 mb-3 w-max max-w-[min(32rem,80vw)] rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md"
+          className="pointer-events-none absolute start-2 bottom-full z-20 mb-3 w-max max-w-[min(32rem,calc(100%-1rem))] rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md"
         >
           {status !== null ? (
             <>
