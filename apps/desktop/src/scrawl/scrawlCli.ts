@@ -58,7 +58,7 @@ const USAGE = `t3-scrawl: look closer at a Scrawl capture and export it. <bundle
   t3-scrawl frames <bundle> --from 0:04 --to 0:06 [--fps 4]   plain PNGs of a range
   t3-scrawl inspect <bundle> [--json | --marks [--json]]      the text, the manifest, the marks
   t3-scrawl export <bundle> [--out demo.mp4] [--zoom] [--crop auto|full|x,y,w,h] [--size 1920]
-      [--fps N] [--no-clicks] [--no-ink]                      one mp4 with the audio in sync
+      [--fps N] [--no-clicks] [--no-ink]    one mp4 with the audio in sync (T3 captures have the ink in their video, so --no-ink changes nothing there)
 
 zoom and frames write into <bundle>/zoom/ and print the paths: open the PNGs and look at them.
 Video and audio are deleted 7 days after a capture; frames/, the contact sheet and scrawl.json stay.`;
