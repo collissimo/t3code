@@ -74,7 +74,7 @@ window.inkLift=()=>{last=null};
 window.inkClear=()=>{last=null;g.clearRect(0,0,innerWidth,innerHeight)};
 </script></body></html>`;
 
-const PILL_PAGE = `<!doctype html><html><body style="margin:0;background:#18181b;color:#fafafa;font:600 13px system-ui;display:flex;align-items:center;justify-content:center;gap:8px;height:100vh;border-radius:999px;overflow:hidden;user-select:none">
+const PILL_PAGE = `<!doctype html><html><body style="margin:0;background:#18181b;color:#fafafa;font:600 13px system-ui;display:flex;align-items:center;justify-content:center;gap:8px;height:100vh;overflow:hidden;user-select:none">
 <span style="width:9px;height:9px;border-radius:50%;background:#ef4444"></span><span id="t">0:00</span>
 <script>window.setClock=(v)=>{document.getElementById("t").textContent=v}</script></body></html>`;
 
@@ -176,9 +176,9 @@ const make = Effect.gen(function* () {
   };
 
   const start = Effect.fn("DesktopScrawl.start")(function* () {
-    if (running !== null) {
-      return yield* new DesktopScrawlError({ reason: "A capture is already running." });
-    }
+    // The renderer owns the capture and only starts when it has none, so one left here lost its
+    // renderer to a reload. Without this its ink and pill would stay on screen for good.
+    if (running !== null) tearDown(running);
     void dropOldMedia(capturesDir, Date.now());
     const cursor = Electron.screen.getCursorScreenPoint();
     const display = Electron.screen.getDisplayNearestPoint(cursor);
@@ -217,18 +217,20 @@ const make = Effect.gen(function* () {
     void inkWindow.loadURL(dataUrl(INK_PAGE));
     inkWindow.showInactive();
 
-    const pill = new Electron.BrowserWindow(
-      overlayOptions({
-        x: display.bounds.x + Math.round((display.bounds.width - PILL_WIDTH) / 2),
-        y: display.bounds.y + 8,
+    // In the corner, because it shows in the recording: on Windows 10 22H2 neither a transparent nor
+    // an opaque window stayed out of it with setContentProtection.
+    const pill = new Electron.BrowserWindow({
+      ...overlayOptions({
+        x: display.workArea.x + display.workArea.width - PILL_WIDTH - 8,
+        y: display.workArea.y + display.workArea.height - PILL_HEIGHT - 8,
         width: PILL_WIDTH,
         height: PILL_HEIGHT,
       }),
-    );
+      transparent: false,
+      backgroundColor: "#18181b",
+    });
     pill.setIgnoreMouseEvents(true);
     pill.setAlwaysOnTop(true, "screen-saver");
-    // Stays out of the recording, so it never covers what is being shown.
-    pill.setContentProtection(true);
     void pill.loadURL(dataUrl(PILL_PAGE));
     pill.showInactive();
 

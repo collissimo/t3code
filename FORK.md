@@ -166,6 +166,8 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
   own a keyframe, click bursts fold into one (`clicked ×3`), and clicks the screen did not answer
   read as `pointed`. On 32 real captures this took cuts through sentences from 59 of 127 lines to 1.
 - Uses the dictation model above, with word times mapped back across the pauses it cuts out.
+- The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
+  not keep it out on Windows 10 22H2.
 - Bundles are in `<T3 home>/scrawl/captures` in Scrawl's format, so the Scrawl skill and the
   `scrawl` CLI (`inspect`, `zoom`, `frames`) read them. Video and audio are deleted after 7 days.
 - Code: `apps/desktop/src/scrawl/`, `apps/web/src/scrawl/`, `packages/contracts/src/scrawl.ts`.

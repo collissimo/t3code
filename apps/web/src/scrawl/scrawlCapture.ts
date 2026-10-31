@@ -10,6 +10,7 @@ import { DEFAULT_DICTATION_LANGUAGE } from "../dictation/dictationLanguages";
 import { DICTATION_LANGUAGE_KEY } from "../dictation/useDictation";
 import { getLocalStorageItem } from "../hooks/useLocalStorage";
 import { randomUUID } from "../lib/utils";
+import { wordsOrWhole } from "./narration";
 import { buildBundle } from "./scrawlBundle";
 import { findSceneChanges, THUMB_HEIGHT, THUMB_WIDTH, type LumaSample } from "./sceneChanges";
 
@@ -261,7 +262,10 @@ const start = async (bridge: DesktopBridge) => {
   }
 };
 
+const released = new WeakSet<Running>();
 const release = (capture: Running) => {
+  if (released.has(capture)) return;
+  released.add(capture);
   clearInterval(capture.pcmTimer);
   clearInterval(capture.sampleTimer);
   for (const track of capture.screen.getTracks()) track.stop();
@@ -318,8 +322,12 @@ const finish = async (bridge: DesktopBridge, capture: Running) => {
       sessionId: capture.sessionId,
       words: true,
     });
-    const words = transcript?.ok ? (transcript.value.words ?? []) : [];
     const transcriptText = transcript?.ok ? transcript.value.text : "";
+    const words = wordsOrWhole(
+      transcript?.ok ? (transcript.value.words ?? []) : [],
+      transcriptText,
+      durationMs,
+    );
     const built = await buildBundle(
       {
         session: capture.session,

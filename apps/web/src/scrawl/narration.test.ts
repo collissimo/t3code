@@ -5,6 +5,7 @@ import {
   foldActions,
   formatNarrationLine,
   splitSentences,
+  wordsOrWhole,
   type TimedWord,
 } from "./narration.ts";
 
@@ -99,6 +100,23 @@ describe("buildNarration", () => {
       sceneChanges: [2_000],
     });
     expect(formatNarrationLine(lines[0]!, 0)).toBe("- #1 (0:02) screen changed");
+  });
+
+  it("still has a keyframe when nothing was said or done", () => {
+    const lines = buildNarration({ words: [], events: [], marks: [], durationMs: 4_000 });
+    expect(lines.map((line) => formatNarrationLine(line, 0))).toEqual([
+      "- #1 (0:02) nothing said or done",
+    ]);
+  });
+
+  it("keeps the speech when the model could not time its words", () => {
+    const lines = buildNarration({
+      words: wordsOrWhole([], "Das hier bitte weg. Und das auch.", 8_000),
+      events: [{ kind: "click", t: 2_000, x: 0.5, y: 0.5 }],
+      marks: [],
+      durationMs: 8_000,
+    });
+    expect(lines.map((line) => line.text)).toEqual(["Das hier bitte weg. Und das auch."]);
   });
 
   it("gives a click said over no speech its own line", () => {

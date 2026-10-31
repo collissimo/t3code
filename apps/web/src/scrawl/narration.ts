@@ -89,6 +89,14 @@ const SCORES: Record<NarrationAction["kind"], number> = {
 const endsSentence = (word: string) => /[.!?;:]["”’)\]]*$/.test(word);
 const endsClause = (word: string) => /,["”’)\]]*$/.test(word);
 
+/** A model that cannot time words still said them: the speech stays whole on one line. */
+export const wordsOrWhole = (
+  words: ReadonlyArray<TimedWord>,
+  text: string,
+  durationMs: number,
+): ReadonlyArray<TimedWord> =>
+  words.length > 0 || text === "" ? words : [{ text, t0: 0, t1: durationMs }];
+
 export function splitSentences(words: ReadonlyArray<TimedWord>): Array<Sentence> {
   const sentences: Array<Sentence> = [];
   let open: Sentence | null = null;
@@ -266,6 +274,11 @@ export function buildNarration(input: {
     sentences,
     input.sceneChanges === undefined ? folded : withReactions(folded, input.sceneChanges),
   );
+  // Nothing said, done or changed: the picture is still what the capture shows.
+  if (sentences.length === 0) {
+    const frameT = input.durationMs / 2;
+    return [{ t0: 0, t1: input.durationMs, frameT, text: "", actions: [] }];
+  }
   const owners = chooseFrameOwners(sentences, input.durationMs);
   const groups: Array<Array<Sentence>> = [];
   let ownerSeen = false;
@@ -324,6 +337,9 @@ const describeActions = (actions: ReadonlyArray<NarrationAction>) => {
 export function formatNarrationLine(line: NarrationLine, index: number): string {
   const head = `- #${index + 1} (${formatClock(line.frameT)})`;
   const actions = describeActions(line.actions);
-  if (line.text === "") return `${head} ${actions === "" ? "screen changed" : actions}`;
+  if (line.text === "") {
+    const shown = line.actions.length > 0 ? "screen changed" : "nothing said or done";
+    return `${head} ${actions === "" ? shown : actions}`;
+  }
   return `${head}${actions === "" ? "" : ` [${actions}]`} “${line.text}”`;
 }
