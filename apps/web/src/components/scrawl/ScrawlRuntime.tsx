@@ -4,7 +4,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { resolveShortcutCommand } from "../../keybindings";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
-import { isScrawlAvailable, toggleScrawl } from "../../scrawl/scrawlCapture";
+import { getScrawlState, isScrawlAvailable, toggleScrawl } from "../../scrawl/scrawlCapture";
 import {
   getScrawlHistoryState,
   isScrawlHistoryOpen,
@@ -34,7 +34,8 @@ export function ScrawlRuntime() {
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the one rebuild pass of this page load, which runs outside React
   useEffect(() => {
-    if (!isScrawlAvailable()) return;
+    // Asking frees a capture the desktop app still runs, so never while this page has its own.
+    if (!isScrawlAvailable() || getScrawlState().phase !== "idle") return;
     void rebuildUnfinishedCaptures().catch((error: unknown) => {
       console.warn("scrawl: unfinished captures could not be listed", error);
     });

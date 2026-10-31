@@ -33,6 +33,9 @@ import {
 const SEND_INTERVAL_MS = 500;
 const SAMPLE_INTERVAL_MS = 750;
 const VIDEO_TIMESLICE_MS = 2_000;
+// The MP4 muxer hands over nothing until the next keyframe, whatever the timeslice, and left alone
+// that took over 11 seconds in Chromium: a crash would leave a header and no video.
+const VIDEO_KEYFRAME_INTERVAL_MS = 2_000;
 // Keyframes come out of this video, so small text has to survive it.
 const VIDEO_BITS_PER_SECOND = 6_000_000;
 const MAX_FRAME_RATE = 15;
@@ -205,7 +208,11 @@ const start = async (bridge: DesktopBridge) => {
     const format = chooseVideoFormat();
     const recorder = new MediaRecorder(
       new MediaStream([...screen.getVideoTracks(), ...mic.stream.getAudioTracks()]),
-      { mimeType: format.mimeType, videoBitsPerSecond: VIDEO_BITS_PER_SECOND },
+      {
+        mimeType: format.mimeType,
+        videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+        videoKeyFrameIntervalDuration: VIDEO_KEYFRAME_INTERVAL_MS,
+      } as MediaRecorderOptions,
     );
     const samples: Array<LumaSample> = [];
     const capture: Running = {

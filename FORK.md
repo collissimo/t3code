@@ -175,6 +175,8 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
   them back. A crash or reload during a capture loses at most the last seconds: the next launch
   rebuilds it once from `unfinished.json`, `timing.json`, `audio.pcm` and the video. A capture that
   fails is kept and offers a manual rebuild. Scene changes come from sampling the video again.
+- The recorder sets a 2-second keyframe interval on purpose: without it the MP4 muxer put nothing but
+  a header on disk for over 11 seconds, so a crash left no video. Measured in Chromium.
 - Past captures (Alt+Shift+H, palette, Settings) find, insert, pin, or bin a capture and show the
   date retention acts on. Same presets and `.pinned` marker as Scrawl: by default video goes to the
   Recycle Bin after 7 days and the capture after 30. The list and the hourly pass share one plan
