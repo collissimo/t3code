@@ -1,6 +1,6 @@
 // Builds what an agent reads from a finished recording: keyframes taken from the video, the contact
-// sheet, the summary text and the manifest. The folder keeps Scrawl's shape, so the Scrawl skill and
-// the `scrawl` CLI (zoom, frames, export) read these bundles as well.
+// sheet, the summary text and the manifest. The folder keeps Scrawl's shape, so `t3-scrawl`, the Scrawl
+// skill and the `scrawl` CLI read these bundles alike.
 
 import {
   SCRAWL_INK_HOLD_MS,
@@ -266,11 +266,16 @@ export const summaryText = (
   lines: ReadonlyArray<NarrationLine>,
   croppedTo: string | null,
 ) => {
-  const { app, windowTitle, bundlePath } = recording.session;
+  const { app, windowTitle, bundlePath, lookCloserCommand } = recording.session;
   const source = [app, windowTitle ? `“${windowTitle}”` : ""].filter(Boolean).join(" ") || "Screen";
   return [
     `[scrawl ${formatDuration(recording.durationMs)} · ${source} · ${bundlePath}]`,
     "Open contact-sheet.png and frames/ in that folder before changing anything: the marks and words only make sense on the images, which can show more than the text does.",
+    ...(lookCloserCommand === undefined
+      ? []
+      : [
+          `To look closer (motion, a flicker, what a mark points at), run: "${lookCloserCommand}" zoom "${bundlePath}" --at 0:21 (or --at "a phrase", or --mark m1). It prints a PNG to open. Also: frames --from --to, inspect --marks, export.`,
+        ]),
     ...(croppedTo === null ? [] : [`Cropped to: ${croppedTo} (full frames in frames-full/)`]),
     ...lines.map(formatNarrationLine),
   ].join("\n");
@@ -436,6 +441,7 @@ export async function buildBundle(
   const manifest = {
     version: 1,
     id: recording.session.id,
+    inkInVideo: true,
     createdAtMs: Date.now(),
     durationMs: recording.durationMs,
     target: {

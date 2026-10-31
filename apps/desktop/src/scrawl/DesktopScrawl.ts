@@ -65,6 +65,7 @@ import { ScrawlInputTracker, type CursorPoint } from "./inputTracker.ts";
 import { startScrawlContextProcess, type ScrawlContextProcess } from "./scrawlContextProcess.ts";
 import { loadWindowAtPoint } from "./windowAtPoint.ts";
 import { taskbarStrip } from "./windowList.ts";
+import { renderScrawlShim, scrawlShimName } from "./scrawlShim.ts";
 
 // Another program (the Scrawl app uses the same keys) may hold the shortcut and let go of it later.
 const SHORTCUT_RETRY_MS = 15_000;
@@ -208,6 +209,27 @@ const make = Effect.gen(function* () {
   let shortcutRetry: ReturnType<typeof setInterval> | null = null;
   // Ids are checked by the contract, and finished captures keep writing frames and a summary.
   const bundleOf = (id: string) => NodePath.join(capturesDir, `${id}.scrawl`);
+  const lookCloserCommand = NodePath.join(
+    environment.baseDir,
+    "bin",
+    scrawlShimName(environment.platform),
+  );
+  // Written on every start: the executable's path changes when the app moves or the channel does.
+  const shimWritten = environment.isPackaged
+    ? yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(NodePath.dirname(lookCloserCommand), { recursive: true });
+        await NodeFSP.writeFile(
+          lookCloserCommand,
+          renderScrawlShim({
+            platform: environment.platform,
+            executable: process.execPath,
+            t3Home: environment.baseDir,
+          }),
+          { mode: 0o755 },
+        );
+        return true;
+      }).pipe(Effect.catchDefect(() => Effect.succeed(false)))
+    : false;
 
   const ink = (capture: RunningCapture, script: string) => {
     if (!capture.ink.isDestroyed()) void capture.ink.webContents.executeJavaScript(script, true);
@@ -391,6 +413,7 @@ const make = Effect.gen(function* () {
       app: front?.owner.name.replace(/\.exe$/i, "") ?? "",
       windowTitle: front?.title ?? "",
       bundlePath,
+      ...(shimWritten ? { lookCloserCommand } : {}),
     };
     const capture: RunningCapture = {
       id,

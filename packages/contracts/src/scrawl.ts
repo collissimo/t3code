@@ -17,6 +17,8 @@ export const ScrawlStartResult = Schema.Struct({
   app: Schema.String,
   windowTitle: Schema.String,
   bundlePath: Schema.String,
+  /** The command agents look closer with. Only an installed app writes one. */
+  lookCloserCommand: Schema.optional(Schema.String),
 });
 export type ScrawlStartResult = typeof ScrawlStartResult.Type;
 

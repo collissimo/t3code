@@ -208,4 +208,10 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
   date retention acts on. Same presets and `.pinned` marker as Scrawl: by default video goes to the
   Recycle Bin after 7 days and the capture after 30. The list and the hourly pass share one plan
   (`apps/desktop/src/scrawl/captureStore.ts`), so the dates shown are what happens.
+- Agents look closer with `<T3 home>/bin/t3-scrawl.cmd` (`t3-scrawl` elsewhere), which the app writes
+  at every start and the pasted text names: `zoom <bundle> --at 0:21|"a phrase"|--mark N`, `frames
+  --from --to`, `inspect [--json|--marks]`, `export [--out] [--zoom] [--crop] [--size]`. It needs no
+  Scrawl app and no running T3 Code. The app's exe does the work with `--scrawl`: Chromium is the
+  only video decoder in the app, so plain Node (`t3.cmd`) and a shipped ffmpeg lost to a hidden page
+  running mediabunny on WebCodecs. Agents on another machine cannot reach the bundle either way.
 - Code: `apps/desktop/src/scrawl/`, `apps/web/src/scrawl/`, `packages/contracts/src/scrawl.ts`.

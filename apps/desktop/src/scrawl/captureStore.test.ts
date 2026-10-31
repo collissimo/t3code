@@ -76,7 +76,13 @@ describe("planRebuilds", () => {
         windowTitle: "Board",
         bundlePath: "x",
       },
-      input: { events: [{ kind: "click", t: 5, x: 0.1, y: 0.2 }], strokes: [] },
+      input: {
+        events: [{ kind: "click", t: 5, x: 0.1, y: 0.2 }],
+        strokes: [],
+        cursor: [],
+        windows: [],
+        flags: [],
+      },
     });
     await makeBundle(dir, "scrawl-crashed-0", {
       [UNFINISHED_FILE]: journal,
