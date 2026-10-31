@@ -69,7 +69,7 @@ only. It needs the repository secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude set
 the subscription's monthly Agent SDK credit) or `ANTHROPIC_API_KEY` (Console API credits; wins
 when both are set). Each fork/upstream pair is checked once and cached, so retries cost nothing.
 When Claude cannot make it typecheck, the run fails. The T3 scheduled task "Fork repair" looks for
-a red `Fork release` or `Fork check` on `collin/main` every two hours, fixes the cause in a pull
+a red `Fork release` or `Fork check` on `collin/main` every four hours, fixes the cause in a pull
 request and merges it once `Fork check` is green; it needs the machine with T3 Code running. By
 hand: sync `collin/main`, then `gh workflow run fork-release.yml` (`-f force=true` asks Claude
 again instead).
