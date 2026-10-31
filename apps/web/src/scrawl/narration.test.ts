@@ -129,6 +129,166 @@ describe("buildNarration", () => {
     expect(formatNarrationLine(lines.at(-1)!, 1)).toBe("- #2 (0:20) clicked");
   });
 
+  it("draws a group of marks on one keyframe, numbered, without cutting a sentence", () => {
+    const words = [
+      ...say("Erst etwas Einleitung.", 0),
+      ...say("Dieses Feld hier soll weg.", 2_000),
+      ...say("Und dann noch dieser.", 5_000),
+      ...say("Das hier auch noch.", 7_000),
+    ];
+    const lines = buildNarration({
+      words,
+      events: [{ kind: "click", t: 12_000, x: 0.5, y: 0.5 }],
+      marks: [
+        { id: "m1", t0: 2_200, t1: 2_800, shape: "circle" },
+        { id: "m2", t0: 3_000, t1: 3_200, shape: "underline", strokes: [1, 2] },
+        { id: "m3", t0: 7_200, t1: 7_800, shape: "arrow" },
+      ],
+      durationMs: 14_000,
+      sceneChanges: [4_000],
+      markGroups: [["m1", "m2", "m3"]],
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.frameT).toBe(7_800);
+    expect(lines[0]!.text).toBe(words.map((word) => word.text).join(" "));
+    expect(formatNarrationLine(lines[0]!, 0)).toBe(
+      [
+        "- #1 (0:07) “Erst etwas Einleitung.”",
+        "  ✎① 0:02 circled",
+        "  ✎② 0:03 underlined (2 strokes) “Dieses Feld hier soll weg. Und dann noch dieser.”",
+        "  ✎③ 0:07 drew an arrow “Das hier auch noch.”",
+      ].join("\n"),
+    );
+  });
+
+  it("names a lone mark by its shape and leaves it unnumbered", () => {
+    const lines = buildNarration({
+      words: say("Das hier.", 0),
+      events: [],
+      marks: [{ id: "m1", t0: 100, t1: 300, shape: "circle" }],
+      durationMs: 2_000,
+    });
+    expect(formatNarrationLine(lines[0]!, 0)).toBe("- #1 (0:00) [circled] “Das hier.”");
+  });
+
+  it("names what a click landed on, and still says pointed when the screen did not answer", () => {
+    const lines = buildNarration({
+      words: say("Das hier und das hier.", 0),
+      events: [
+        { kind: "click", t: 100, x: 0.1, y: 0.1, role: "button", label: "“Area”" },
+        { kind: "click", t: 200, x: 0.1, y: 0.1, role: "button", label: "“Area”" },
+        { kind: "click", t: 300, x: 0.2, y: 0.1 },
+        { kind: "click", t: 9_000, x: 0.5, y: 0.5, role: "tab item", label: "“Files”" },
+      ],
+      marks: [{ id: "m1", t0: 400, t1: 500, on: "button “Save”" }],
+      durationMs: 12_000,
+      sceneChanges: [9_400],
+    });
+    expect(formatNarrationLine(lines[0]!, 0)).toContain(
+      "[marked button “Save”, pointed at button “Area” ×2, pointed]",
+    );
+    expect(formatNarrationLine(lines[1]!, 1)).toBe("- #2 (0:09) clicked tab item “Files”");
+  });
+
+  it("says shortcuts, app switches and windows at their place, without an image or a cut", () => {
+    const sentence = "Bitte diese Boxen hier entfernen und den Text darunter auch.";
+    const lines = buildNarration({
+      words: say(sentence, 0),
+      events: [
+        { kind: "click", t: 300, x: 0.1, y: 0.1 },
+        { kind: "key", t: 600, shortcut: "Ctrl+C" },
+        { kind: "key", t: 900, shortcut: "Ctrl+C" },
+        { kind: "app_change", t: 1_200, app: "Helium" },
+        { kind: "window", t: 1_500, text: "Helium window opened" },
+      ],
+      marks: [],
+      durationMs: 4_000,
+    });
+    expect(lines.map((line) => line.text)).toEqual([sentence]);
+    expect(lines[0]!.frameT).toBe(600);
+    expect(formatNarrationLine(lines[0]!, 0)).toContain(
+      "[clicked, pressed Ctrl+C ×2, switched to Helium, Helium window opened]",
+    );
+  });
+
+  it("gives no frame to a shortcut in a silence, and folds it into the keyframe before", () => {
+    const lines = buildNarration({
+      words: say("Hallo Welt.", 0),
+      events: [{ kind: "key", t: 20_000, shortcut: "Ctrl+S" }],
+      marks: [{ id: "m1", t0: 100, t1: 300 }],
+      durationMs: 25_000,
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.frameT).toBe(300);
+    expect(formatNarrationLine(lines[0]!, 0)).toContain("pressed Ctrl+S");
+  });
+
+  it("says which way the wheel went, and the screen answering it is not a scene of its own", () => {
+    const lines = buildNarration({
+      words: [],
+      events: [
+        { kind: "scroll", t: 1_000, dx: 0, dy: -1 },
+        { kind: "scroll", t: 1_200, dx: 0, dy: -1 },
+        { kind: "scroll", t: 9_000, dx: 0, dy: 1 },
+        { kind: "scroll", t: 9_200, dx: 0, dy: -1 },
+      ],
+      marks: [],
+      durationMs: 12_000,
+      sceneChanges: [1_100, 1_900, 9_300],
+    });
+    expect(lines.map(formatNarrationLine)).toEqual([
+      "- #1 (0:01) scrolled down",
+      "- #2 (0:09) scrolled up and down",
+    ]);
+  });
+
+  it("gives a flag its own keyframe and marker, and tells it from a mark", () => {
+    const flag = { id: "f1", t0: 20_000, t1: 20_000, shape: "flag" };
+    const said = buildNarration({
+      words: say("Hallo Welt.", 19_800),
+      events: [],
+      marks: [flag],
+      durationMs: 25_000,
+    });
+    expect(formatNarrationLine(said[0]!, 0)).toBe("- #1 (0:20) ⚑ “Hallo Welt.”");
+    const silent = buildNarration({ words: [], events: [], marks: [flag], durationMs: 25_000 });
+    expect(formatNarrationLine(silent[0]!, 0)).toBe("- #1 (0:20) ⚑ flagged this moment");
+  });
+
+  it("says a named drag however short, and a scrub without its direction", () => {
+    const line = buildNarration({
+      words: [],
+      events: [
+        {
+          kind: "drag",
+          t: 100,
+          t1: 200,
+          x0: 0.5,
+          y0: 0.5,
+          x1: 0.51,
+          y1: 0.5,
+          label: "slider “Volume”",
+        },
+        {
+          kind: "drag",
+          t: 400,
+          t1: 500,
+          x0: 0.5,
+          y0: 0.5,
+          x1: 0.6,
+          y1: 0.5,
+          label: "button “Tab”",
+        },
+        { kind: "drag", t: 700, t1: 800, x0: 0.5, y0: 0.5, x1: 0.51, y1: 0.5 },
+      ],
+      marks: [],
+      durationMs: 1_000,
+    })[0]!;
+    expect(formatNarrationLine(line, 0)).toBe(
+      "- #1 (0:00) scrubbed slider “Volume”, dragged button “Tab” right",
+    );
+  });
+
   it("keeps every mark over budget, and speech ahead of the first keyframe with it", () => {
     const marks = Array.from({ length: 9 }, (_, index) => ({
       id: `m${index}`,
@@ -142,5 +302,47 @@ describe("buildNarration", () => {
     const lines = buildNarration({ words, events: [], marks, durationMs: 22_000 });
     expect(lines).toHaveLength(9);
     expect(lines[0]!.text).toBe("Erster Satz ohne Aktion. Das hier markiert.");
+  });
+
+  const actedSentence = (t: number) => say("Hier klicke ich jetzt.", t, 100);
+
+  it.each([39_999, 40_000, 139_999, 600_000])(
+    "lets ordinary clicks fill only the base budget in %i ms",
+    (durationMs) => {
+      const times = Array.from({ length: 12 }, (_, index) => 500 + index * 3_000);
+      const lines = buildNarration({
+        words: times.flatMap(actedSentence),
+        events: times.map((t) => ({ kind: "click" as const, t: t + 100, x: 0.5, y: 0.5 })),
+        marks: [],
+        durationMs,
+      });
+      expect(lines).toHaveLength(6);
+    },
+  );
+
+  it("spends the budget past the base on long stretches that show something", () => {
+    const early = Array.from({ length: 6 }, (_, index) => 500 + index * 2_000);
+    const late = [50_000, 90_000, 130_000];
+    const lines = buildNarration({
+      words: [...early, ...late].flatMap(actedSentence),
+      events: [...early, ...late].map((t) => ({
+        kind: "click" as const,
+        t: t + 100,
+        x: 0.5,
+        y: 0.5,
+      })),
+      marks: [],
+      durationMs: 140_000,
+    });
+    expect(lines.map((line) => line.t0)).toEqual(expect.arrayContaining(late));
+  });
+
+  it("takes no keyframe for long speech over a screen where nothing happens", () => {
+    const words = Array.from({ length: 6 }, (_, index) =>
+      say("Ich rede hier einfach weiter ohne etwas zu tun.", index * 20_000, 200),
+    ).flat();
+    const lines = buildNarration({ words, events: [], marks: [], durationMs: 120_000 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.text.split(" ")).toHaveLength(words.length);
   });
 });

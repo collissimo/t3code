@@ -160,14 +160,58 @@ the contact sheet land in the composer on screen. Esc in T3 Code discards a capt
 
 - Desktop app only: a browser cannot see the whole screen, and mobile has no such thing. Clicks and
   ink need Windows; elsewhere a capture has voice and video.
-- While the Scrawl app runs it holds Alt+Shift+S. T3 Code logs that and takes the shortcut within
-  15 seconds of Scrawl closing. The composer button works either way.
+- **Alt+Shift+F** flags a moment while recording (`⚑`, always its own keyframe). The pill shows the
+  flag for a moment.
+- Besides clicks and ink, a capture logs the wheel, the cursor, which windows are on screen, app
+  switches, Ctrl and Win shortcuts, and what a click or stroke landed on (`clicked button “Area”`).
+  Only the cursor and flags work outside Windows. Typed text is never logged, AltGr counts as
+  typing, passwords are never read, and a window title reaches the text an agent reads only in the
+  head line, as in the Scrawl app. Fields say only that they were clicked, not what they are called.
+- This runs in two helper processes, for the length of a capture: one reads Raw Input (no system-wide
+  hook, so no program's mouse waits on it) and the window list, the other is a PowerShell asking UI
+  Automation (about 80 MB). The first lookup in a Chromium-based app turns on that app's accessibility
+  tree, which can slow a heavy page. T3 Code's own windows are not looked up, so clicks on them stay
+  unnamed. A precision touchpad's two-finger scroll may not show as Raw Input wheel events (unchecked).
+- While the Scrawl app runs it holds Alt+Shift+S. Settings > SnapShots > Screen capture says so,
+  and T3 Code takes the shortcut within 15 seconds of Scrawl closing. The composer button and the
+  command palette work either way. Rebind it in the same place.
 - Speech and pointing do not run in step, so sentences are never cut at a click: whole sentences
   own a keyframe, click bursts fold into one (`clicked ×3`), and clicks the screen did not answer
   read as `pointed`. On 32 real captures this took cuts through sentences from 59 of 127 lines to 1.
+- Ink is recognised with Scrawl's rules (`circled`, `underlined`, `drew a line`, `drew an arrow`,
+  else `marked`; `scrawl.json` has `shape`, `from`, `to`). Marks drawn on one screen share a keyframe
+  that draws all their ink, until a click or drag, a scene change, 20 s or 12 strokes. Several on a
+  keyframe are numbered in drawing order in the text and `scrawl.json` (`✎① 0:06 circled “…”`), never
+  on the image. No mark is dropped; over the keyframe budget, neighbouring groups merge. On Scrawl's
+  43 captures all 124 ink marks get the shape and box of Scrawl's current `sketch.rs`. Scrawl compares
+  the screen around the ink, but here the video shows the ink, so scene changes decide "same screen".
+  The laser and pins are not here: Scrawl's Windows build records no laser and Shift+move is the ink.
+- Each keyframe is cropped on its own to what happened around it, with Scrawl's rules and numbers:
+  the input its line names, what a click changed, and edges moved off text
+  (`frames-full/` keeps the whole screen). The contact sheet packs crops of any shape into justified
+  rows, one chip size throughout. Budget: 6 keyframes up to 40 s, one more per 20 s, at most 12;
+  ordinary actions fill only the first 6. A window or cursor log improves the crops when
+  `CaptureRecording` has one. On the 43 real Scrawl captures, given those logs, the crops reproduce
+  Scrawl's own (median overlap 1.00); without them 0.91.
 - Uses the dictation model above, with word times mapped back across the pauses it cuts out.
 - The recording pill in the corner shows in the video and keyframes; `setContentProtection` does
   not keep it out on Windows 10 22H2.
 - Bundles are in `<T3 home>/scrawl/captures` in Scrawl's format, so the Scrawl skill and the
-  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them. Video and audio are deleted after 7 days.
+  `scrawl` CLI (`inspect`, `zoom`, `frames`) read them.
+- Video and audio go to disk as they are recorded and stay out of memory until the build, which reads
+  them back. A crash or reload during a capture loses at most the last seconds: the next launch
+  rebuilds it once from `unfinished.json`, `timing.json`, `audio.pcm` and the video. A capture that
+  fails is kept and offers a manual rebuild. Scene changes come from sampling the video again.
+- The recorder sets a 2-second keyframe interval on purpose: without it the MP4 muxer put nothing but
+  a header on disk for over 11 seconds, so a crash left no video. Measured in Chromium.
+- Past captures (Alt+Shift+H, palette, Settings) find, insert, pin, or bin a capture and show the
+  date retention acts on. Same presets and `.pinned` marker as Scrawl: by default video goes to the
+  Recycle Bin after 7 days and the capture after 30. The list and the hourly pass share one plan
+  (`apps/desktop/src/scrawl/captureStore.ts`), so the dates shown are what happens.
+- Agents look closer with `<T3 home>/bin/t3-scrawl.cmd` (`t3-scrawl` elsewhere), which the app writes
+  at every start and the pasted text names: `zoom <bundle> --at 0:21|"a phrase"|--mark N`, `frames
+  --from --to`, `inspect [--json|--marks]`, `export [--out] [--zoom] [--crop] [--size]`. It needs no
+  Scrawl app and no running T3 Code. The app's exe does the work with `--scrawl`: Chromium is the
+  only video decoder in the app, so plain Node (`t3.cmd`) and a shipped ffmpeg lost to a hidden page
+  running mediabunny on WebCodecs. Agents on another machine cannot reach the bundle either way.
 - Code: `apps/desktop/src/scrawl/`, `apps/web/src/scrawl/`, `packages/contracts/src/scrawl.ts`.

@@ -1,6 +1,6 @@
 // Builds what an agent reads from a finished recording: keyframes taken from the video, the contact
-// sheet, the summary text and the manifest. The folder keeps Scrawl's shape, so the Scrawl skill and
-// the `scrawl` CLI (zoom, frames, export) read these bundles as well.
+// sheet, the summary text and the manifest. The folder keeps Scrawl's shape, so `t3-scrawl`, the Scrawl
+// skill and the `scrawl` CLI read these bundles alike.
 
 import {
   SCRAWL_INK_HOLD_MS,
@@ -9,22 +9,40 @@ import {
   type ScrawlStroke,
 } from "@t3tools/contracts";
 
+import { groupMarks, placeMarks } from "./markGroups";
+import { marksOf } from "./markShapes";
 import {
+  activityItems,
+  computeCrops,
+  cropLabel,
+  FULL,
+  pixelRect,
+  windowSnapshots,
+  type Crop,
+  type CursorSample,
+  type Rect,
+} from "./autocrop";
+import { changeRegions, contentMap, type ContentMap, type RgbaImage } from "./autocropContent";
+import { layoutSheet } from "./contactSheet";
+import {
+  chipDodgesRight,
+  clicksToRing,
+  drawChip,
+  drawClickRing,
+  frameChipScale,
+  SHEET_CHIP_SCALE,
+} from "./frameAnnotations";
+import {
+  budgetFor,
   buildNarration,
   formatNarrationLine,
-  type CaptureMark,
   type NarrationLine,
   type TimedWord,
 } from "./narration";
 import { withoutInkChanges } from "./sceneChanges";
+import { windowChanges } from "./windowChanges";
 
-const SHEET_LONG_EDGE = 1600;
-const SHEET_GUTTER = 6;
-const STROKE_GROUP_MS = 1_500;
-const CROP_PADDING = 0.08;
-// Cropping to most of the screen only loses context.
-const MAX_CROP_AREA = 0.7;
-const MIN_CROP_SIDE = 0.35;
+const SHEET_BACKGROUND = "rgb(28, 29, 34)";
 
 export interface CaptureRecording {
   readonly session: ScrawlStartResult;
@@ -43,13 +61,6 @@ export interface CaptureRecording {
   readonly wav: Uint8Array;
 }
 
-interface ManifestMark extends CaptureMark {
-  readonly strokes: ReadonlyArray<number>;
-  readonly boxNorm: readonly [number, number, number, number];
-  readonly shape: string;
-  readonly description: string;
-}
-
 // Scrawl stores flat [x, y, dt] triples with positions in 0..=10000.
 const STROKE_SCALE = 10_000;
 const manifestStroke = (stroke: ScrawlStroke, width: number, height: number) => {
@@ -63,7 +74,14 @@ const manifestStroke = (stroke: ScrawlStroke, width: number, height: number) => 
       count > 1 ? Math.round((span * index) / (count - 1)) : 0,
     );
   }
-  return { t0: stroke.t0, t1: stroke.t1, fw: width, fh: height, pts };
+  return {
+    t0: stroke.t0,
+    t1: stroke.t1,
+    fw: width,
+    fh: height,
+    pts,
+    ...(stroke.on === undefined ? {} : { on: stroke.on }),
+  };
 };
 
 const KEYFRAME_REASONS: Record<NarrationLine["actions"][number]["kind"], string> = {
@@ -72,6 +90,7 @@ const KEYFRAME_REASONS: Record<NarrationLine["actions"][number]["kind"], string>
   drag: "click",
   scene: "scene_change",
   scroll: "scene_change",
+  note: "scene_change",
 };
 
 export interface BuiltBundle {
@@ -80,73 +99,19 @@ export interface BuiltBundle {
   readonly lines: ReadonlyArray<NarrationLine>;
 }
 
-const strokesToMarks = (strokes: ReadonlyArray<ScrawlStroke>): Array<ManifestMark> => {
-  const groups: Array<{ t0: number; t1: number; strokes: Array<number> }> = [];
-  strokes.forEach((stroke, index) => {
-    const open = groups.at(-1);
-    if (open !== undefined && stroke.t0 - open.t1 <= STROKE_GROUP_MS) {
-      open.t1 = stroke.t1;
-      open.strokes.push(index);
-    } else {
-      groups.push({ t0: stroke.t0, t1: stroke.t1, strokes: [index] });
-    }
-  });
-  return groups.map((group, index) => {
-    const xs: Array<number> = [];
-    const ys: Array<number> = [];
-    for (const strokeIndex of group.strokes) {
-      strokes[strokeIndex]!.points.forEach((value, at) => (at % 2 === 0 ? xs : ys).push(value));
-    }
-    return {
-      id: `m${index + 1}`,
-      ...group,
-      boxNorm: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
-      shape: "mark",
-      description: `marked (${group.strokes.length} ${group.strokes.length === 1 ? "stroke" : "strokes"})`,
-    };
-  });
-};
+// Scrawl's time-only marker: no ink, the whole screen, and always a keyframe of its own.
+const flagsToMarks = (flags: ReadonlyArray<number>) =>
+  flags.map((t, index) => ({
+    id: `f${index + 1}`,
+    t0: t,
+    t1: t,
+    strokes: [],
+    boxNorm: [0, 0, 1, 1] as [number, number, number, number],
+    shape: "flag" as const,
+    description: "flagged this moment",
+  }));
 
-/** Everything the hand touched, padded, or null when that is most of the screen anyway. */
-function activityBox(recording: Pick<CaptureRecording, "input">): {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-} | null {
-  const xs: Array<number> = [];
-  const ys: Array<number> = [];
-  for (const event of recording.input.events) {
-    if (event.kind === "click") {
-      xs.push(event.x);
-      ys.push(event.y);
-    } else {
-      xs.push(event.x0, event.x1);
-      ys.push(event.y0, event.y1);
-    }
-  }
-  for (const stroke of recording.input.strokes) {
-    stroke.points.forEach((value, index) => (index % 2 === 0 ? xs : ys).push(value));
-  }
-  if (xs.length === 0) return null;
-  const widen = (low: number, high: number) => {
-    let start = low - CROP_PADDING;
-    let end = high + CROP_PADDING;
-    if (end - start < MIN_CROP_SIDE) {
-      const middle = (start + end) / 2;
-      start = middle - MIN_CROP_SIDE / 2;
-      end = middle + MIN_CROP_SIDE / 2;
-    }
-    start = Math.max(0, start);
-    end = Math.min(1, end);
-    return [start, end - start] as const;
-  };
-  const [x, width] = widen(Math.min(...xs), Math.max(...xs));
-  const [y, height] = widen(Math.min(...ys), Math.max(...ys));
-  return width * height > MAX_CROP_AREA ? null : { x, y, width, height };
-}
-
-const seekTo = (video: HTMLVideoElement, seconds: number) =>
+export const seekTo = (video: HTMLVideoElement, seconds: number) =>
   new Promise<void>((resolve, reject) => {
     const onSeeked = () => {
       video.removeEventListener("seeked", onSeeked);
@@ -163,7 +128,7 @@ const seekTo = (video: HTMLVideoElement, seconds: number) =>
     video.currentTime = seconds;
   });
 
-const loadVideo = async (blob: Blob) => {
+export const loadVideo = async (blob: Blob) => {
   const video = document.createElement("video");
   video.muted = true;
   video.preload = "auto";
@@ -188,68 +153,107 @@ const toBlob = (canvas: HTMLCanvasElement) =>
     );
   });
 
-const drawClickRings = (
+interface KeyframeImage {
+  readonly canvas: HTMLCanvasElement;
+  readonly dodgeRight: boolean;
+}
+
+/** A group's earlier ink has faded from the video by the time its keyframe is taken. */
+const drawMarkInk = (
   context: CanvasRenderingContext2D,
   line: NarrationLine,
+  marks: ReadonlyArray<{ readonly id: string; readonly strokes: ReadonlyArray<number> }>,
+  strokes: ReadonlyArray<ScrawlStroke>,
   width: number,
   height: number,
 ) => {
-  context.lineWidth = Math.max(2, width / 700);
-  context.strokeStyle = "rgba(239, 68, 68, 0.85)";
+  context.strokeStyle = "#ff2d2d";
+  context.lineWidth = Math.max(3, width / 640);
+  context.lineCap = "round";
+  context.lineJoin = "round";
   for (const action of line.actions) {
-    if (action.kind !== "clicks") continue;
-    for (const [x, y] of action.points) {
+    if (action.kind !== "mark") continue;
+    const mark = marks.find((candidate) => candidate.id === action.id);
+    for (const strokeIndex of mark?.strokes ?? []) {
+      const { points } = strokes[strokeIndex]!;
       context.beginPath();
-      context.arc(x * width, y * height, Math.max(10, width / 90), 0, Math.PI * 2);
+      for (let index = 0; index + 1 < points.length; index += 2) {
+        context.lineTo(points[index]! * width, points[index + 1]! * height);
+      }
       context.stroke();
     }
   }
 };
 
-const drawChip = (context: CanvasRenderingContext2D, label: string, height: number) => {
-  // Blind reading tests in Scrawl: the number needs its own white square to be read as a number.
-  const size = Math.max(24, height / 18);
-  context.fillStyle = "#ffffff";
-  context.strokeStyle = "#111111";
-  context.lineWidth = 2;
-  context.beginPath();
-  context.roundRect(5, 5, size, size, 4);
-  context.fill();
-  context.stroke();
-  context.fillStyle = "#000000";
-  context.font = `700 ${Math.round(size * 0.68)}px system-ui`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(label, 5 + size / 2, 5 + size / 2 + 1);
-};
-
-/** Frames in time order in justified rows, each with its number. */
-const drawContactSheet = (frames: ReadonlyArray<HTMLCanvasElement>) => {
-  const columns = Math.max(1, Math.ceil(Math.sqrt(frames.length)));
-  const rows = Math.ceil(frames.length / columns);
-  const first = frames[0]!;
-  const aspect = first.width / first.height;
-  const landscape = aspect >= 1;
-  const cellWidth = landscape
-    ? Math.floor((SHEET_LONG_EDGE - SHEET_GUTTER * (columns + 1)) / columns)
-    : Math.floor((SHEET_LONG_EDGE / aspect - SHEET_GUTTER * (columns + 1)) / columns);
-  const cellHeight = Math.round(cellWidth / aspect);
+/** Frames in time order in justified rows, each with its number at one size. */
+const drawContactSheet = (frames: ReadonlyArray<KeyframeImage>) => {
+  const layout = layoutSheet(frames.map(({ canvas }) => canvas));
   const sheet = document.createElement("canvas");
-  sheet.width = columns * cellWidth + (columns + 1) * SHEET_GUTTER;
-  sheet.height = rows * cellHeight + (rows + 1) * SHEET_GUTTER;
+  sheet.width = layout.width;
+  sheet.height = layout.height;
   const context = sheet.getContext("2d")!;
-  context.fillStyle = "#101014";
+  context.fillStyle = SHEET_BACKGROUND;
   context.fillRect(0, 0, sheet.width, sheet.height);
-  frames.forEach((frame, index) => {
-    const x = SHEET_GUTTER + (index % columns) * (cellWidth + SHEET_GUTTER);
-    const y = SHEET_GUTTER + Math.floor(index / columns) * (cellHeight + SHEET_GUTTER);
-    context.save();
-    context.translate(x, y);
-    context.drawImage(frame, 0, 0, cellWidth, cellHeight);
-    drawChip(context, String(index + 1), cellHeight);
-    context.restore();
+  context.imageSmoothingQuality = "high";
+  layout.cells.forEach((cell, index) => {
+    const frame = frames[index]!;
+    context.drawImage(frame.canvas, cell.x, cell.y, cell.width, cell.height);
+    drawChip(context, String(index + 1), cell, SHEET_CHIP_SCALE, frame.dodgeRight);
   });
   return sheet;
+};
+
+/** One keyframe cut to `rect`, with its click rings; the number goes on after the sheet is drawn. */
+const renderKeyframe = (
+  raw: HTMLCanvasElement,
+  rect: Rect,
+  rings: ReadonlyArray<readonly [number, number]>,
+  ink: ReadonlyArray<readonly [number, number]>,
+): KeyframeImage => {
+  const box = pixelRect(rect, raw.width, raw.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = box.width;
+  canvas.height = box.height;
+  const context = canvas.getContext("2d")!;
+  context.save();
+  context.translate(-box.x, -box.y);
+  context.drawImage(raw, 0, 0);
+  context.restore();
+  const inFrame = ([x, y]: readonly [number, number]) =>
+    [(x * raw.width - box.x) / box.width, (y * raw.height - box.y) / box.height] as const;
+  const ringsInFrame = rings.map(inFrame);
+  for (const ring of ringsInFrame) {
+    if (ring[0] >= 0 && ring[0] <= 1 && ring[1] >= 0 && ring[1] <= 1) {
+      drawClickRing(context, ring, box.width, box.height);
+    }
+  }
+  return { canvas, dodgeRight: chipDodgesRight(ink.map(inFrame), ringsInFrame) };
+};
+
+const stampFrameChip = ({ canvas, dodgeRight }: KeyframeImage, index: number) => {
+  const { width, height } = canvas;
+  drawChip(
+    canvas.getContext("2d")!,
+    String(index + 1),
+    { x: 0, y: 0, width },
+    frameChipScale(width, height),
+    dodgeRight,
+  );
+};
+
+/** A crop bug must never cost the capture: the full frames are always right. */
+const cropsOrFull = (compute: () => Array<Crop>, count: number): ReadonlyArray<Crop> => {
+  try {
+    return compute();
+  } catch (error) {
+    console.warn("Scrawl auto-crop failed", error);
+    return Array.from({ length: count }, () => ({
+      rect: FULL,
+      kind: "full" as const,
+      reason: "not cropped",
+      apps: [],
+    }));
+  }
 };
 
 const formatDuration = (ms: number) => {
@@ -257,17 +261,22 @@ const formatDuration = (ms: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
-const summaryText = (
+export const summaryText = (
   recording: Pick<CaptureRecording, "session" | "durationMs">,
   lines: ReadonlyArray<NarrationLine>,
-  cropped: boolean,
+  croppedTo: string | null,
 ) => {
-  const { app, windowTitle, bundlePath } = recording.session;
+  const { app, windowTitle, bundlePath, lookCloserCommand } = recording.session;
   const source = [app, windowTitle ? `“${windowTitle}”` : ""].filter(Boolean).join(" ") || "Screen";
   return [
     `[scrawl ${formatDuration(recording.durationMs)} · ${source} · ${bundlePath}]`,
     "Open contact-sheet.png and frames/ in that folder before changing anything: the marks and words only make sense on the images, which can show more than the text does.",
-    ...(cropped ? ["Cropped to: the activity (full frames in frames-full/)"] : []),
+    ...(lookCloserCommand === undefined
+      ? []
+      : [
+          `To look closer (motion, a flicker, what a mark points at), run: "${lookCloserCommand}" zoom "${bundlePath}" --at 0:21 (or --at "a phrase", or --mark m1). It prints a PNG to open. Also: frames --from --to, inspect --marks, export.`,
+        ]),
+    ...(croppedTo === null ? [] : [`Cropped to: ${croppedTo} (full frames in frames-full/)`]),
     ...lines.map(formatNarrationLine),
   ].join("\n");
 };
@@ -278,78 +287,161 @@ export async function buildBundle(
 ): Promise<BuiltBundle> {
   const shift = (t: number) => Math.max(0, t - recording.inputOffsetMs);
   const events = recording.input.events.map((event) =>
-    event.kind === "click"
-      ? { ...event, t: shift(event.t) }
-      : { ...event, t: shift(event.t), t1: shift(event.t1) },
+    event.kind === "drag"
+      ? { ...event, t: shift(event.t), t1: shift(event.t1) }
+      : { ...event, t: shift(event.t) },
   );
+  const windows = recording.input.windows.map((snapshot) => ({
+    ...snapshot,
+    t: shift(snapshot.t),
+  }));
   const strokes = recording.input.strokes.map((stroke) => ({
     ...stroke,
     t0: shift(stroke.t0),
     t1: shift(stroke.t1),
   }));
-  const marks = strokesToMarks(strokes);
+  const inkMarks = marksOf(strokes, recording.session.width, recording.session.height);
+  const marks = [...inkMarks, ...flagsToMarks(recording.input.flags.map(shift))];
+  const sceneChanges = withoutInkChanges(recording.sceneChanges, strokes, SCRAWL_INK_HOLD_MS);
   const lines = buildNarration({
     words: recording.words,
-    events,
+    events: [...events, ...windowChanges(windows)],
     marks,
     durationMs: recording.durationMs,
-    sceneChanges: withoutInkChanges(recording.sceneChanges, strokes, SCRAWL_INK_HOLD_MS),
+    sceneChanges,
+    markGroups: groupMarks(inkMarks, {
+      actionTimes: events.flatMap((event) =>
+        event.kind === "click" || event.kind === "drag" ? [event.t] : [],
+      ),
+      sceneChanges,
+      budget: budgetFor(recording.durationMs),
+    }).map((group) => group.map((mark) => mark.id)),
   });
-  const box = activityBox({ input: { events, strokes } });
+  const { width, height } = recording.session;
+  const screen = [width, height] as const;
+  const cursor = recording.input.cursor.map(([t, x, y]): CursorSample => [
+    Math.round(shift(t)),
+    x,
+    y,
+  ]);
 
   const { video, dispose } = await loadVideo(recording.video);
-  const frames: Array<HTMLCanvasElement> = [];
-  const fullFrames: Array<HTMLCanvasElement> = [];
-  const bytesOf = async (blob: Blob) => new Uint8Array(await blob.arrayBuffer());
+  const raws: Array<HTMLCanvasElement> = [];
+  const contents: Array<ContentMap> = [];
+  const changes: Array<ReadonlyArray<Rect>> = [];
+  const grabFrame = async (t: number) => {
+    const seconds = Math.max(0, (t - recording.videoOffsetMs) / 1000);
+    await seekTo(video, Math.min(seconds, Math.max(0, video.duration - 0.05)));
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d", { willReadFrequently: true })!;
+    context.drawImage(video, 0, 0);
+    return { canvas, image: context.getImageData(0, 0, canvas.width, canvas.height) };
+  };
   try {
-    for (const [index, line] of lines.entries()) {
-      const seconds = Math.max(0, (line.frameT - recording.videoOffsetMs) / 1000);
-      await seekTo(video, Math.min(seconds, Math.max(0, video.duration - 0.05)));
-      const full = document.createElement("canvas");
-      full.width = video.videoWidth;
-      full.height = video.videoHeight;
-      const context = full.getContext("2d")!;
-      context.drawImage(video, 0, 0);
-      drawClickRings(context, line, full.width, full.height);
-      const name = `frame-${String(index + 1).padStart(2, "0")}.png`;
-      if (box === null) {
-        await write(`frames/${name}`, await bytesOf(await toBlob(full)));
-        frames.push(full);
-        continue;
-      }
-      await write(`frames-full/${name}`, await bytesOf(await toBlob(full)));
-      fullFrames.push(full);
-      const cropped = document.createElement("canvas");
-      cropped.width = Math.round(box.width * full.width);
-      cropped.height = Math.round(box.height * full.height);
-      cropped
-        .getContext("2d")!
-        .drawImage(full, -Math.round(box.x * full.width), -Math.round(box.y * full.height));
-      await write(`frames/${name}`, await bytesOf(await toBlob(cropped)));
-      frames.push(cropped);
+    let previous: RgbaImage | null =
+      lines[0]!.frameT > recording.videoOffsetMs ? (await grabFrame(0)).image : null;
+    for (const line of lines) {
+      const { canvas, image } = await grabFrame(line.frameT);
+      raws.push(canvas);
+      contents.push(contentMap(image, screen));
+      changes.push(previous === null ? [] : changeRegions(previous, image));
+      previous = image;
     }
   } finally {
     dispose();
   }
 
-  const sheet = drawContactSheet(frames);
-  const contactSheet = await toBlob(sheet);
+  const keyframeTimes = lines.map((line) => line.frameT);
+  const inkOwners = new Map<number, number>();
+  lines.forEach((line, index) => {
+    for (const action of line.actions) {
+      if (action.kind !== "mark") continue;
+      const mark = marks.find((candidate) => candidate.id === action.id);
+      for (const stroke of mark?.strokes ?? []) inkOwners.set(stroke, index);
+    }
+  });
+  const crops = cropsOrFull(
+    () =>
+      computeCrops({
+        screen,
+        durationMs: recording.durationMs,
+        keyframes: keyframeTimes,
+        items: activityItems({
+          durationMs: recording.durationMs,
+          keyframes: keyframeTimes,
+          strokes,
+          events: events.filter((event) => event.kind === "click" || event.kind === "drag"),
+          changes,
+          inkOwners,
+          inputOwner: (t) => {
+            const owner = lines.findIndex((line) =>
+              line.actions.some(
+                (action) => action.kind !== "mark" && t >= action.t0 && t <= action.t1,
+              ),
+            );
+            return owner < 0 ? undefined : owner;
+          },
+          cursor,
+        }),
+        snapshots: windowSnapshots(windows, screen),
+        content: contents,
+      }),
+    lines.length,
+  );
+  const label = cropLabel(crops);
+
+  const clicks = events.filter((event) => event.kind === "click");
+  const frames: Array<KeyframeImage> = [];
+  const fullFrames: Array<KeyframeImage> = [];
+  lines.forEach((line, index) => {
+    const raw = raws[index]!;
+    drawMarkInk(raw.getContext("2d")!, line, marks, strokes, raw.width, raw.height);
+    const rings = clicksToRing(line, clicks);
+    const ink = strokes.flatMap((stroke, at) => {
+      const shown =
+        inkOwners.get(at) === index ||
+        (stroke.t0 <= line.frameT && line.frameT <= stroke.t1 + SCRAWL_INK_HOLD_MS);
+      if (!shown) return [];
+      return Array.from(
+        { length: Math.trunc(stroke.points.length / 2) },
+        (_, point) => [stroke.points[point * 2]!, stroke.points[point * 2 + 1]!] as const,
+      );
+    });
+    frames.push(renderKeyframe(raw, crops[index]!.rect, rings, ink));
+    if (label !== null) fullFrames.push(renderKeyframe(raw, FULL, rings, ink));
+    // Twelve full screens add up: each is released as soon as it is cut.
+    raw.width = 0;
+  });
+
+  const bytesOf = async (blob: Blob) => new Uint8Array(await blob.arrayBuffer());
+  const contactSheet = await toBlob(drawContactSheet(frames));
   await write("contact-sheet.png", await bytesOf(contactSheet));
-  if (fullFrames.length > 0) {
+  if (label !== null) {
     await write(
       "contact-sheet-full.png",
       await bytesOf(await toBlob(drawContactSheet(fullFrames))),
     );
   }
+  const writeFrames = async (folder: string, images: ReadonlyArray<KeyframeImage>) => {
+    for (const [index, image] of images.entries()) {
+      stampFrameChip(image, index);
+      const name = `frame-${String(index + 1).padStart(2, "0")}.png`;
+      await write(`${folder}/${name}`, await bytesOf(await toBlob(image.canvas)));
+    }
+  };
+  await writeFrames("frames", frames);
+  await writeFrames("frames-full", fullFrames);
   await write("audio.wav", recording.wav);
 
-  const text = summaryText(recording, lines, box !== null);
+  const text = summaryText(recording, lines, label);
   const encoder = new TextEncoder();
   await write("summary.md", encoder.encode(`${text}\n`));
-  const { width, height } = recording.session;
   const manifest = {
     version: 1,
     id: recording.session.id,
+    inkInVideo: true,
     createdAtMs: Date.now(),
     durationMs: recording.durationMs,
     target: {
@@ -367,42 +459,48 @@ export async function buildBundle(
       words: recording.words,
     },
     strokes: strokes.map((stroke) => manifestStroke(stroke, width, height)),
-    marks,
+    marks: placeMarks(marks, lines),
     events: events.map((event) => (event.kind === "click" ? { ...event, button: "left" } : event)),
     keyframes: lines.map((line, index) => {
-      const main = line.actions.find((action) => action.kind === "mark") ?? line.actions.at(-1);
+      const drawn = line.actions.filter((action) => action.kind === "mark");
+      const main = drawn[0] ?? line.actions.at(-1);
       return {
         index: index + 1,
         t: Math.round(line.frameT),
         reason: main === undefined ? "speech" : KEYFRAME_REASONS[main.kind],
         file: `frames/frame-${String(index + 1).padStart(2, "0")}.png`,
-        event: main?.kind ?? "speech",
+        event:
+          drawn.length > 0
+            ? drawn.map(({ id }) => marks.find((mark) => mark.id === id)?.description).join("; ")
+            : (main?.kind ?? "speech"),
         said: line.text,
+        ...(drawn[0] === undefined ? {} : { markId: drawn[0].id }),
       };
     }),
     contactSheet: "contact-sheet.png",
     video: recording.videoName,
     videoOffsetMs: recording.videoOffsetMs,
     audio: "audio.wav",
-    windows: [],
-    cursor: [],
-    ...(box === null
+    windows,
+    cursor,
+    ...(label === null
       ? {}
       : {
           autocrop: {
-            label: "the activity",
+            label,
             fullFrames: "frames-full",
             fullContactSheet: "contact-sheet-full.png",
-            crops: lines.map((_line, index) => ({
+            crops: crops.map(({ rect, kind, reason, apps }, index) => ({
               index: index + 1,
-              x: Math.round(box.x * width),
-              y: Math.round(box.y * height),
-              width: Math.round(box.width * width),
-              height: Math.round(box.height * height),
-              kind: "focus",
-              reason: "around the activity",
-              apps: [recording.session.app],
+              x: Math.round(rect[0] * width),
+              y: Math.round(rect[1] * height),
+              width: Math.round((rect[2] - rect[0]) * width),
+              height: Math.round((rect[3] - rect[1]) * height),
+              kind,
+              reason,
+              apps,
             })),
+            changes,
           },
         }),
   };

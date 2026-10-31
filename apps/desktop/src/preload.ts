@@ -127,6 +127,18 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   scrawlCancel: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_CANCEL_CHANNEL, input),
   scrawlAppendVideo: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_APPEND_VIDEO_CHANNEL, input),
   scrawlWriteFile: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_WRITE_FILE_CHANNEL, input),
+  scrawlReadFile: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_READ_FILE_CHANNEL, input),
+  scrawlListUnfinished: () => ipcRenderer.invoke(IpcChannels.SCRAWL_LIST_UNFINISHED_CHANNEL),
+  scrawlBeginRebuild: (input) =>
+    ipcRenderer.invoke(IpcChannels.SCRAWL_BEGIN_REBUILD_CHANNEL, input),
+  scrawlMarkBuilt: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_MARK_BUILT_CHANNEL, input),
+  scrawlListCaptures: () => ipcRenderer.invoke(IpcChannels.SCRAWL_LIST_CAPTURES_CHANNEL),
+  scrawlSetPinned: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_SET_PINNED_CHANNEL, input),
+  scrawlTrash: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_TRASH_CHANNEL, input),
+  scrawlReveal: (input) => ipcRenderer.invoke(IpcChannels.SCRAWL_REVEAL_CHANNEL, input),
+  scrawlGetShortcutState: () => ipcRenderer.invoke(IpcChannels.SCRAWL_GET_SHORTCUT_STATE_CHANNEL),
+  scrawlCheckShortcut: (shortcut) =>
+    ipcRenderer.invoke(IpcChannels.SCRAWL_CHECK_SHORTCUT_CHANNEL, shortcut),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),

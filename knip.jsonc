@@ -70,6 +70,8 @@
         "gnome-extension/extension.js!",
         "src/electron/WindowsForegroundFocusWorker.ts!",
         "src/snapShot/GlobalShiftShortcutWorker.ts!",
+        "src/scrawl/scrawlCli.ts!",
+        "src/scrawl/scrawlRenderPage.ts!",
         "src/snapShot/RegionSnapShotWorker.ts!",
         "src/snapShot/SnapShotAccessibilityWorker.ts!",
         "src/boot.ts!",

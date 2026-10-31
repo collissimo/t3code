@@ -799,6 +799,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "snap-shot-enabled",
   },
   {
+    id: "scrawl-shortcut",
+    title: "Screen capture shortcut",
+    to: "/settings/snap-shot",
+    searchTerms: ["scrawl record screen video voice ink global hotkey another program"],
+  },
+  {
+    id: "scrawl-retention",
+    title: "Keep screen captures",
+    to: "/settings/snap-shot",
+    searchTerms: ["scrawl retention delete old video pin storage disk space"],
+  },
+  {
+    id: "scrawl-captures",
+    title: "Past screen captures",
+    to: "/settings/snap-shot",
+    searchTerms: ["scrawl history recordings find reopen rebuild recover"],
+  },
+  {
     id: "providers",
     title: "Providers",
     to: "/settings/providers",

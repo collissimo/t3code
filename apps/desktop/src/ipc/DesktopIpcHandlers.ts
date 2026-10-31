@@ -12,9 +12,19 @@ import {
 import { dictationAppend, dictationCancel, dictationFinish } from "./methods/dictation.ts";
 import {
   scrawlAppendVideo,
+  scrawlBeginRebuild,
   scrawlCancel,
+  scrawlCheckShortcut,
+  scrawlGetShortcutState,
+  scrawlListCaptures,
+  scrawlListUnfinished,
+  scrawlMarkBuilt,
+  scrawlReadFile,
+  scrawlReveal,
+  scrawlSetPinned,
   scrawlStart,
   scrawlStop,
+  scrawlTrash,
   scrawlWriteFile,
 } from "./methods/scrawl.ts";
 import {
@@ -112,6 +122,16 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(scrawlCancel);
   yield* ipc.handle(scrawlAppendVideo);
   yield* ipc.handle(scrawlWriteFile);
+  yield* ipc.handle(scrawlReadFile);
+  yield* ipc.handle(scrawlListUnfinished);
+  yield* ipc.handle(scrawlBeginRebuild);
+  yield* ipc.handle(scrawlMarkBuilt);
+  yield* ipc.handle(scrawlListCaptures);
+  yield* ipc.handle(scrawlSetPinned);
+  yield* ipc.handle(scrawlTrash);
+  yield* ipc.handle(scrawlReveal);
+  yield* ipc.handle(scrawlGetShortcutState);
+  yield* ipc.handle(scrawlCheckShortcut);
   yield* ipc.handle(dictationCancel);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 

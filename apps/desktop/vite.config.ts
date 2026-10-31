@@ -75,6 +75,7 @@ export default defineConfig({
       define: publicConfigDefine,
       entry: [
         "src/electron/WindowsForegroundFocusWorker.ts",
+        "src/scrawl/ScrawlContextWorker.ts",
         "src/snapShot/GlobalShiftShortcutWorker.ts",
         "src/snapShot/RegionSnapShotWorker.ts",
         "src/snapShot/SnapShotAccessibilityWorker.ts",
@@ -87,7 +88,21 @@ export default defineConfig({
       },
     },
     {
-      // boot.cjs requires the other two at runtime, so all three stay separate files.
+      format: "cjs",
+      outDir: "dist-electron",
+      dts: false,
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/scrawl/scrawlCli.ts", "src/scrawl/scrawlRenderPage.ts"],
+      clean: false,
+      deps: {
+        alwaysBundle: (id) => !id.startsWith("node:") && id !== "electron",
+        neverBundle: (id) => id === "electron",
+        onlyBundle: false,
+      },
+    },
+    {
+      // boot.cjs requires the others at runtime, so they all stay separate files.
       format: "cjs",
       outDir: "dist-electron",
       dts: false,
@@ -96,7 +111,8 @@ export default defineConfig({
       entry: ["src/boot.ts", "src/compileCache.ts"],
       clean: false,
       deps: {
-        neverBundle: (id) => id === "./main.cjs" || id === "./compileCache.cjs",
+        neverBundle: (id) =>
+          id === "./main.cjs" || id === "./compileCache.cjs" || id === "./scrawlCli.cjs",
       },
     },
     {
