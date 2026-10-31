@@ -65,7 +65,7 @@ export class ScriptT3Tools extends Context.Service<
       McpSchema.McpServerClient
     >;
   }
->()("t3/mcp/toolkits/script/ScriptT3Tools") {}
+>()("t3/mcp/toolkits/script/handlers/ScriptT3Tools") {}
 
 export const layer = McpToolAccess.toLayer(
   ScriptToolkit,

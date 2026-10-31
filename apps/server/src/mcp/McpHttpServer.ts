@@ -1121,17 +1121,17 @@ export const layerProjectRegistration = toolkitRegistration(ProjectToolkit, Proj
 // Nested T3 calls need the same server instance the tools registered on, which layers memoize.
 const layerScriptT3Tools = Layer.effect(
   ScriptHandlers.ScriptT3Tools,
-  McpServer.McpServer.asEffect().pipe(
-    Effect.map((server) =>
-      ScriptHandlers.ScriptT3Tools.of({
-        call: (request) =>
-          server.callTool({
-            name: request.name,
-            arguments: request.arguments as Record<string, unknown>,
-          }),
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    return ScriptHandlers.ScriptT3Tools.of({
+      call: Effect.fn("ScriptT3Tools.call")(function* (request) {
+        return yield* server.callTool({
+          name: request.name,
+          arguments: request.arguments as Record<string, unknown>,
+        });
       }),
-    ),
-  ),
+    });
+  }),
 );
 
 export const layerScriptToolkit = toolkitRegistration(ScriptToolkit, ScriptHandlers.layer).pipe(
