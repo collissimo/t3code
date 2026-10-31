@@ -1,7 +1,7 @@
 // Speech to text on the server's machine through transcribe.cpp. A client streams microphone audio
 // into a recording session. The model loads on the first chunk and is let go after a stretch without
 // recordings (it holds 1 to 2.5 GB). The last seconds are transcribed repeatedly for a live preview;
-// the final transcript is the whole recording, cut at pauses.
+// the final transcript is everything that was spoken, cut at pauses.
 
 import type * as TranscribeCpp from "transcribe-cpp";
 
@@ -21,6 +21,12 @@ const PREVIEW_PAUSE_MS = 800;
 const CHUNK_MIN_SECONDS = 25;
 const CHUNK_MAX_SECONDS = 35;
 const PAUSE_FRAME = SAMPLE_RATE / 10;
+// Speech models invent text for a thinking pause, so they only get what Silero marks as speech. On
+// looped room tone from real recordings Cohere wrote up to 57 words, and Parakeet turned a faint
+// voice in the background into a paragraph; behind this gate all of them wrote nothing. A short gap
+// stays because words run together without one.
+const VAD_OPTIONS = { minSilenceMs: 300, speechPadMs: 200, minSpeechMs: 200 };
+const KEPT_PAUSE_SAMPLES = 0.4 * SAMPLE_RATE;
 const MAX_RECORDING_SECONDS = 15 * 60;
 // A client that vanished mid-recording leaves its session behind.
 const ABANDONED_SESSION_MS = 2 * 60_000;
@@ -31,6 +37,8 @@ export interface DictationEngineOptions {
   readonly loadModule: () => Promise<TranscribeModule>;
   /** Path of the model file that suits the language, or a rejection saying why there is none. */
   readonly resolveModel: (language: string | undefined) => Promise<string>;
+  /** Path of the Silero model, undefined when none is installed; pauses then reach the model. */
+  readonly resolveVadModel?: () => Promise<string | undefined>;
   /** Let go of the model after this long without a recording; 0 keeps it. */
   readonly idleUnloadMs: number;
   /** transcribe.cpp backend; "auto" picks the GPU when there is one. */
@@ -48,6 +56,11 @@ interface LoadedModel {
   readonly model: TranscribeCpp.TranscribeModel;
   readonly session: TranscribeCpp.Session;
   readonly languages: ReadonlyArray<string>;
+}
+
+interface LoadedVad {
+  readonly model: TranscribeCpp.TranscribeModel;
+  readonly session: TranscribeCpp.VadSession;
 }
 
 interface RecordingSession {
@@ -87,8 +100,33 @@ export function splitAtPauses(audio: Float32Array): ReadonlyArray<Float32Array> 
     pieces.push(audio.subarray(start, cut));
     start = cut;
   }
-  pieces.push(audio.subarray(start));
+  if (start < audio.length) pieces.push(audio.subarray(start));
   return pieces;
+}
+
+/** The audio of `segments`, with the pauses between them cut down to a short gap. */
+export function keepSpeech(
+  audio: Float32Array,
+  segments: ReadonlyArray<TranscribeCpp.VadSegment>,
+): Float32Array {
+  const parts: Array<Float32Array> = [];
+  let previousEnd: number | undefined;
+  for (const { startSample, endSample } of segments) {
+    if (previousEnd !== undefined) {
+      parts.push(
+        audio.subarray(previousEnd, Math.min(startSample, previousEnd + KEPT_PAUSE_SAMPLES)),
+      );
+    }
+    parts.push(audio.subarray(startSample, endSample));
+    previousEnd = endSample;
+  }
+  const speech = new Float32Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    speech.set(part, offset);
+    offset += part.length;
+  }
+  return speech;
 }
 
 export function decodePcm16(base64: string): Float32Array {
@@ -109,6 +147,7 @@ export class DictationEngine {
   #loaded: LoadedModel | undefined;
   #loading: Promise<LoadedModel> | undefined;
   #loadFailure: Error | undefined;
+  #vad: Promise<LoadedVad | undefined> | undefined;
   // One native session serves every run, one at a time.
   #busy: Promise<unknown> = Promise.resolve();
   #previewAbort: AbortController | undefined;
@@ -172,7 +211,7 @@ export class DictationEngine {
     const started = this.#now();
     const text = await this.#exclusive(async () => {
       const texts: Array<string> = [];
-      for (const piece of splitAtPauses(audio)) {
+      for (const piece of splitAtPauses(await this.#speechOnly(audio))) {
         try {
           const result = await loaded.session.run(
             piece,
@@ -181,7 +220,12 @@ export class DictationEngine {
           texts.push(result.text);
         } catch (error) {
           const module = await this.#loadModule();
-          if (!(error instanceof module.InputTooShort)) throw error;
+          if (error instanceof module.OutputTruncated && error.partialResult !== undefined) {
+            // One piece that ran away must not cost the rest of the recording.
+            texts.push(error.partialResult.text);
+          } else if (!(error instanceof module.InputTooShort)) {
+            throw error;
+          }
         }
       }
       return texts.join(" ");
@@ -239,14 +283,16 @@ export class DictationEngine {
     const tail = session.samples.slice(start, session.length);
     const abort = new AbortController();
     this.#previewAbort = abort;
-    const run = this.#exclusive(() =>
-      abort.signal.aborted
-        ? Promise.resolve(undefined)
-        : loaded.session.run(tail, {
-            ...this.#runOptions(loaded, session.language),
-            signal: abort.signal,
-          }),
-    )
+    const run = this.#exclusive(async () => {
+      if (abort.signal.aborted) return undefined;
+      const speech = await this.#speechOnly(tail);
+      // During a pause the preview keeps the words that were said.
+      if (abort.signal.aborted || speech.length === 0) return undefined;
+      return loaded.session.run(speech, {
+        ...this.#runOptions(loaded, session.language),
+        signal: abort.signal,
+      });
+    })
       .then((result) => {
         if (result !== undefined && !abort.signal.aborted && !result.aborted) {
           session.preview = result.text.split(/\s+/).filter(Boolean).join(" ");
@@ -264,6 +310,39 @@ export class DictationEngine {
   #runOptions(loaded: LoadedModel, language: string | undefined): TranscribeCpp.TranscribeOptions {
     // A model that cannot be told the language detects it.
     return language !== undefined && loaded.languages.includes(language) ? { language } : {};
+  }
+
+  /** Must run inside #exclusive: a VAD session serves one run at a time. */
+  async #speechOnly(audio: Float32Array): Promise<Float32Array> {
+    const vad = await this.#loadVad();
+    if (vad === undefined) return audio;
+    try {
+      const { segments } = await vad.session.run(audio, VAD_OPTIONS);
+      return keepSpeech(audio, segments);
+    } catch (error) {
+      this.#options.log?.(`voice activity detection failed, keeping pauses: ${describe(error)}`);
+      return audio;
+    }
+  }
+
+  #loadVad(): Promise<LoadedVad | undefined> {
+    this.#vad ??= (async () => {
+      try {
+        const path = await this.#options.resolveVadModel?.();
+        if (path === undefined) {
+          this.#options.log?.("no Silero model installed, pauses reach the speech model");
+          return undefined;
+        }
+        const module = await this.#loadModule();
+        const model = await module.TranscribeModel.load(path, { backend: "cpu" });
+        this.#options.log?.(`loaded ${path}, pauses stay out of the speech model`);
+        return { model, session: model.createVadSession() };
+      } catch (error) {
+        this.#options.log?.(`Silero cannot be loaded, keeping pauses: ${describe(error)}`);
+        return undefined;
+      }
+    })();
+    return this.#vad;
   }
 
   #exclusive<T>(task: () => Promise<T>): Promise<T> {
@@ -324,6 +403,11 @@ export class DictationEngine {
     await this.#busy;
     loaded.session.dispose();
     loaded.model.dispose();
+    const vad = await this.#vad;
+    // Looked up again on the next recording: Silero may have been installed meanwhile.
+    this.#vad = undefined;
+    vad?.session.dispose();
+    vad?.model.dispose();
   }
 
   /** Drops abandoned recordings and lets go of an unused model; called every half minute. */
