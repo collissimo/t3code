@@ -477,6 +477,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["beta alpha simlock callstack simulator emulator ios android pool lease gateway"],
   },
   {
+    id: "script-tool",
+    title: "Script tool",
+    to: "/settings/labs",
+    scope: "environment",
+    searchTerms: ["beta programmatic tool calling javascript program sandbox code mode"],
+  },
+  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/threads",
