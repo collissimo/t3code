@@ -68,8 +68,11 @@ side calls what the other renamed) or broken on `collin/main` itself. Fixes go i
 only. It needs the repository secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`; bills
 the subscription's monthly Agent SDK credit) or `ANTHROPIC_API_KEY` (Console API credits; wins
 when both are set). Each fork/upstream pair is checked once and cached, so retries cost nothing.
-When Claude cannot make it typecheck, the run fails: sync `collin/main` by hand, then
-`gh workflow run fork-release.yml` (`-f force=true` asks Claude again instead).
+When Claude cannot make it typecheck, the run fails. The T3 scheduled task "Fork repair" looks for
+a red `Fork release` or `Fork check` on `collin/main` every four hours, fixes the cause in a pull
+request and merges it once `Fork check` is green; it needs the machine with T3 Code running. By
+hand: sync `collin/main`, then `gh workflow run fork-release.yml` (`-f force=true` asks Claude
+again instead).
 
 Pull requests into `collin/main` and pushes to it run `.github/workflows/fork-check.yml` (frozen
 install and the same typecheck). Upstream's CI needs Blacksmith runners a fork does not have; its
