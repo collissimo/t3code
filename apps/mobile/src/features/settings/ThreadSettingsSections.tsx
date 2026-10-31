@@ -254,7 +254,7 @@ function BetaSettingsSection() {
         {supported.map((environment) => (
           <SettingsSwitchRow
             key={environment.environmentId}
-            icon="curlybraces"
+            icon="terminal"
             label={environment.label}
             value={environment.serverConfig?.settings.scriptToolEnabled === true}
             disabled={!writable.has(environment.environmentId)}
