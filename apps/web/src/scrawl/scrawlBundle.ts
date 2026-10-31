@@ -58,7 +58,7 @@ export interface CaptureRecording {
   readonly durationMs: number;
   readonly sceneChanges: ReadonlyArray<number>;
   readonly wav: Uint8Array;
-  /** Scrawl's window log and cursor samples, on the input clock. Crops are better with them. */
+  /** Scrawl's window log and cursor samples, on the clock of `input`. Crops are better with them. */
   readonly windows?: ReadonlyArray<LoggedWindows>;
   readonly cursor?: ReadonlyArray<CursorSample>;
 }
@@ -290,6 +290,15 @@ export async function buildBundle(
   });
   const { width, height } = recording.session;
   const screen = [width, height] as const;
+  const windows = (recording.windows ?? []).map((snapshot) => ({
+    ...snapshot,
+    t: Math.round(shift(snapshot.t)),
+  }));
+  const cursor = (recording.cursor ?? []).map(([t, x, y]): CursorSample => [
+    Math.round(shift(t)),
+    x,
+    y,
+  ]);
 
   const { video, dispose } = await loadVideo(recording.video);
   const raws: Array<HTMLCanvasElement> = [];
@@ -349,9 +358,9 @@ export async function buildBundle(
             );
             return owner < 0 ? undefined : owner;
           },
-          cursor: (recording.cursor ?? []).map(([t, x, y]): CursorSample => [shift(t), x, y]),
+          cursor,
         }),
-        snapshots: windowSnapshots(recording.windows ?? [], screen, shift),
+        snapshots: windowSnapshots(windows, screen),
         content: contents,
       }),
     lines.length,
@@ -376,6 +385,8 @@ export async function buildBundle(
     });
     frames.push(renderKeyframe(raw, crops[index]!.rect, rings, ink));
     if (label !== null) fullFrames.push(renderKeyframe(raw, FULL, rings, ink));
+    // Twelve full screens add up: each is released as soon as it is cut.
+    raw.width = 0;
   });
 
   const bytesOf = async (blob: Blob) => new Uint8Array(await blob.arrayBuffer());
@@ -438,8 +449,8 @@ export async function buildBundle(
     video: recording.videoName,
     videoOffsetMs: recording.videoOffsetMs,
     audio: "audio.wav",
-    windows: recording.windows ?? [],
-    cursor: recording.cursor ?? [],
+    windows,
+    cursor,
     ...(label === null
       ? {}
       : {

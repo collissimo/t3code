@@ -146,10 +146,9 @@ export interface LoggedWindows {
 export const windowSnapshots = (
   logged: ReadonlyArray<LoggedWindows>,
   [width, height]: readonly [number, number],
-  shift: (t: number) => number,
 ): Array<WindowSnapshot> =>
   logged.map((snapshot) => ({
-    t: shift(snapshot.t),
+    t: snapshot.t,
     windows: snapshot.windows.map((win) => {
       const [x, y, w, h] = win.bounds;
       return {

@@ -386,10 +386,9 @@ describe("computeCrops", () => {
         },
       ],
       SCREEN,
-      (t) => t - 100,
     );
     expect(snapshots[0]).toEqual({
-      t: 0,
+      t: 100,
       windows: [
         {
           id: 1,
