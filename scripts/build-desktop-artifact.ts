@@ -1051,7 +1051,8 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
+// Fork: 110, not upstream's 80. Fork natives add 15 files and a native Windows build adds the server compile cache.
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 110;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
