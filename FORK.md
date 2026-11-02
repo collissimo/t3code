@@ -75,8 +75,12 @@ hand: sync `collin/main`, then `gh workflow run fork-release.yml` (`-f force=tru
 again instead).
 
 Pull requests into `collin/main` and pushes to it run `.github/workflows/fork-check.yml` (frozen
-install and the same typecheck). Upstream's CI needs Blacksmith runners a fork does not have; its
-workflows are disabled in this repository (Actions settings), otherwise their checks stay queued.
+install and the same typecheck). Upstream's CI needs Blacksmith runners a fork does not have.
+
+Only `fork-check.yml` and `fork-release.yml` stay on. Every other workflow runs upstream's project
+(releases, previews, relay deploys, PR labels, issue triage) and is disabled in Actions settings,
+not deleted: a deleted file conflicts on sync whenever upstream edits it. Turn one back on with
+`gh workflow enable "<name>"`. A workflow upstream adds later starts enabled; disable it the same way.
 
 Watcher setup (once, or after the token expires), from `fork/upstream-nightly-watcher/`:
 `npx wrangler deploy`, then copy a fine-grained token for `collissimo/t3code` (Contents: read and
@@ -103,6 +107,10 @@ check.
   hot upstream files (AGENTS.md, shared configs) when a separate file works.
 - Keep edits to existing upstream files small and isolated.
 - Sync often; small merges are easier than large ones.
+- Do not delete upstream code or workflows just because the fork does not use them; each deletion
+  conflicts on sync when upstream edits that file.
+- `agentContextBudget.json` stays equal to upstream's. `AgentContextBudget.test.ts` leaves fork-only
+  MCP tools out of its measurement, so add new ones to its filter.
 
 ## Fork features
 

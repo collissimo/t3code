@@ -13,6 +13,7 @@ import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { SCRIPT_TOOL_NAME } from "../mcp/toolkits/script/tools.ts";
 import {
   CLAUDE_PROVIDER,
   makeClaudeQueryOptions,
@@ -116,11 +117,14 @@ it.effect("agent context matches the committed budget", () =>
       // The model sees these fields. outputSchema and annotations are protocol metadata.
       mcpToolListJsonBytes: utf8Bytes(
         JSON.stringify(
-          mcp.tools.map(({ tool }) => ({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-          })),
+          // Fork-only tool: left out so the budget file stays equal to upstream's and never conflicts.
+          mcp.tools
+            .filter(({ tool }) => tool.name !== SCRIPT_TOOL_NAME)
+            .map(({ tool }) => ({
+              name: tool.name,
+              description: tool.description,
+              inputSchema: tool.inputSchema,
+            })),
         ),
       ),
     };
