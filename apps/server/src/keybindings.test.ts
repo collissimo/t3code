@@ -180,6 +180,8 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           { key: "mod+j", command: "terminal.toggle" },
           { key: "mod+shift+d+o", command: "terminal.new" },
           { key: "mod+x", command: "invalid.command" },
+          // A retired command's old default is dropped without an issue.
+          { key: "alt+shift+h", command: "scrawl.history", when: "!terminalFocus" },
         ]),
       );
 

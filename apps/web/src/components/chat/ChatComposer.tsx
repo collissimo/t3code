@@ -43,7 +43,6 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -236,9 +235,6 @@ const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidErro
 import { markDictatedText } from "@t3tools/client-runtime/voice-input/dictationMarker";
 import { useDictation } from "../../dictation/useDictation";
 import { ComposerDictationButton } from "./ComposerDictationButton";
-import { ComposerScrawlButton } from "./ComposerScrawlButton";
-import { cancelScrawl, type ScrawlDelivery } from "../../scrawl/scrawlCapture";
-import { isScrawlHistoryOpen } from "../../scrawl/scrawlHistory";
 import { DictationHistoryDialog } from "./DictationHistoryDialog";
 import { toastManager } from "../ui/toast";
 import { BuildingIcon, PlayIcon } from "lucide-react";
@@ -2536,34 +2532,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ensureLeadingBoundary: true,
       }),
   });
-  // A stable object: the capture keeps it and calls the composer's latest handlers.
-  const scrawlInsertStable = useStableCallback((text: string) =>
-    insertComposerTextStable(text, "end", { ensureLeadingBoundary: true }),
-  );
-  const scrawlAttachStable = useStableCallback(async (file: File) => {
-    const { compressImageToByteLimit, readFileAsDataUrl } =
-      await import("../../lib/imageCompression");
-    const compressed = await compressImageToByteLimit(file, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
-    if (!compressed.ok) return false;
-    const previewUrl = await readFileAsDataUrl(compressed.file);
-    return (
-      addComposerImagesToDraft([
-        {
-          type: "image",
-          id: randomUUID(),
-          name: compressed.file.name,
-          mimeType: compressed.file.type,
-          sizeBytes: compressed.file.size,
-          previewUrl,
-          file: compressed.file,
-        },
-      ]).length > 0
-    );
-  });
-  const [scrawlDelivery] = useState<ScrawlDelivery>(() => ({
-    insert: scrawlInsertStable,
-    attachImage: scrawlAttachStable,
-  }));
   const toggleDictationStable = useStableCallback(dictation.toggle);
   const cancelDictationStable = useStableCallback(dictation.cancel);
   const insertDictationFromHistoryStable = useStableCallback(dictation.insertFromHistory);
@@ -2575,12 +2543,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         // The open history takes Esc for itself, so closing it cannot drop a running recording.
-        if (dictationHistoryOpen || isScrawlHistoryOpen()) return;
-        if (cancelScrawl()) {
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
+        if (dictationHistoryOpen) return;
         // Before anything else claims Esc (it can also interrupt a running turn).
         if (cancelDictationStable()) {
           event.preventDefault();
@@ -3600,7 +3563,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               >
                 <div className="me-2 flex items-center gap-0.5">
                   {composerAttachButton}
-                  <ComposerScrawlButton delivery={scrawlDelivery} />
                   <ComposerDictationButton
                     state={dictation.state}
                     onToggle={toggleDictationStable}

@@ -94,6 +94,17 @@ function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): bool
   return keybindingRuleIdentity(left) === keybindingRuleIdentity(right);
 }
 
+// Commands that were once written into keybindings.json as defaults: their entries are dropped
+// quietly instead of reported, so a removed feature leaves no config warning behind.
+const RETIRED_COMMANDS: ReadonlySet<string> = new Set(["scrawl.history"]);
+
+const isRetiredEntry = (entry: unknown) =>
+  typeof entry === "object" &&
+  entry !== null &&
+  "command" in entry &&
+  typeof entry.command === "string" &&
+  RETIRED_COMMANDS.has(entry.command);
+
 const LATE_DEFAULT_KEYBINDINGS: ReadonlyArray<{
   readonly id: string;
   readonly alongside: KeybindingRule;
@@ -335,6 +346,7 @@ const make = Effect.gen(function* () {
     const keybindings: KeybindingRule[] = [];
     const issues: ServerConfigIssue[] = [];
     for (const [index, entry] of decodedEntries.value.entries()) {
+      if (isRetiredEntry(entry)) continue;
       const decodedRule = decodeKeybindingRuleExit(entry);
       if (decodedRule._tag === "Failure") {
         const detail = Cause.pretty(decodedRule.cause);

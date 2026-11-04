@@ -252,17 +252,6 @@ export function snapShotModifierPairLabel(modifier: SnapShotModifier, apple: boo
   const label = (apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier];
   return `${label} + ${label}`;
 }
-export const ScrawlRetention = Schema.Literals(["week", "month", "forever"]);
-export type ScrawlRetention = typeof ScrawlRetention.Type;
-export const DEFAULT_SCRAWL_SHORTCUT: SnapShotKeyChord = {
-  key: "s",
-  metaKey: false,
-  ctrlKey: false,
-  shiftKey: true,
-  altKey: true,
-  modKey: false,
-};
-
 const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
   kind: "both-shift-keys",
 };
@@ -530,12 +519,6 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  scrawlShortcut: SnapShotKeyChord.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SCRAWL_SHORTCUT)),
-  ),
-  scrawlRetention: ScrawlRetention.pipe(
-    Schema.withDecodingDefault(Effect.succeed<ScrawlRetention>("week")),
-  ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
@@ -1860,8 +1843,6 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
-  scrawlShortcut: Schema.optionalKey(SnapShotKeyChord),
-  scrawlRetention: Schema.optionalKey(ScrawlRetention),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

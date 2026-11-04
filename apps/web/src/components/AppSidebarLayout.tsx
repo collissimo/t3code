@@ -12,7 +12,6 @@ import { useLocation, useRouter, type AnyRouter } from "@tanstack/react-router";
 import { moveWorkspaceFocus, workspaceAreaProps } from "../lib/workspaceFocus";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
-import { ScrawlRuntime } from "./scrawl/ScrawlRuntime";
 import {
   releaseThreadUndoShortcut,
   threadUndoClaimsShortcut,
@@ -477,7 +476,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <BackgroundThreadAnnouncer />
         <SidebarControl />
         {isElectron ? <HistorySwipeNavigation /> : null}
-        {isElectron ? <ScrawlRuntime /> : null}
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );
