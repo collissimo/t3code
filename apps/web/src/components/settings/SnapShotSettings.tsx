@@ -47,7 +47,6 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { ScrawlSettingsSection } from "./ScrawlSettingsSection";
 import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
@@ -561,7 +560,6 @@ export function SnapShotSettings() {
           ) : null}
         </SettingsUnavailableGroup>
       </SettingsSection>
-      <ScrawlSettingsSection />
       {wizard && state ? (
         <SnapShotSetupDialog
           state={state}

@@ -175,7 +175,6 @@ import {
   resolveProjectPickerTarget,
   resolveWslProjectSelection,
 } from "../wslPaths";
-import { scrawlPaletteItems } from "./scrawl/scrawlPaletteItems";
 import {
   resolveCommandPaletteProject,
   ADDON_ICON_CLASS,
@@ -1595,8 +1594,6 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
-
-  actionItems.push(...scrawlPaletteItems());
 
   actionItems.push({
     kind: "action",

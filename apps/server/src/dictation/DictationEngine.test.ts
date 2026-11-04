@@ -9,14 +9,12 @@ import {
   SAMPLE_RATE,
   decodePcm16,
   keepSpeech,
-  keptSpans,
   normalizeLanguage,
   splitAtPauses,
-  toRecordingMs,
   type TranscribeModule,
 } from "./DictationEngine.ts";
 import { dictationBackend } from "./localDictation.ts";
-import { findModel, findTimingModel, findVadModel, rankModels } from "./modelFiles.ts";
+import { findModel, findVadModel, rankModels } from "./modelFiles.ts";
 import { handleDictationWorkerRequest } from "./worker.ts";
 
 const V3 = "C:/models/parakeet-tdt-0.6b-v3-Q8_0.gguf";
@@ -97,22 +95,6 @@ describe("findModel", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("finds only a Parakeet model that knows the language to time words", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped();
-      const directories = [directory];
-      yield* fs.writeFileString(path.join(directory, "canary-1b-v2-Q8_0.gguf"), "");
-      expect(yield* findTimingModel({ language: "de", directories })).toBeUndefined();
-      yield* fs.writeFileString(path.join(directory, "parakeet-unified-en-0.6b-Q8_0.gguf"), "");
-      expect(yield* findTimingModel({ language: "de", directories })).toBeUndefined();
-      const v3 = path.join(directory, "parakeet-tdt-0.6b-v3-Q8_0.gguf");
-      yield* fs.writeFileString(v3, "");
-      expect(yield* findTimingModel({ language: "de", directories })).toBe(v3);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("names the folders when nothing is installed", () =>
     Effect.gen(function* () {
       const error = yield* findModel({
@@ -154,16 +136,6 @@ describe("audio input", () => {
     expect(kept.length).toBe(Math.round(3.4 * SAMPLE_RATE));
     expect(keepSpeech(audio, [])).toHaveLength(0);
   });
-  it("puts a word back on the recording's clock across a cut pause", () => {
-    const spans = keptSpans([
-      { startSample: SAMPLE_RATE, endSample: 2 * SAMPLE_RATE },
-      { startSample: 9 * SAMPLE_RATE, endSample: 10 * SAMPLE_RATE },
-    ]);
-    expect(toRecordingMs(500, spans)).toBe(1_500);
-    // 1 s of speech and the kept 0.4 s of the pause come before the second stretch.
-    expect(toRecordingMs(1_600, spans)).toBe(9_200);
-    expect(toRecordingMs(1_600, [])).toBe(1_600);
-  });
   it("reads the backend from the environment, auto when unset or unknown", () => {
     expect(dictationBackend(" CPU ")).toBe("cpu");
     expect(dictationBackend("vulkan")).toBe("vulkan");
@@ -184,43 +156,21 @@ class FakeModel {
   static runError: Error | undefined;
   static runLengths: Array<number> = [];
   static vadDisposed = 0;
-  static disposedPaths: Array<string> = [];
-  static timesNothing = false;
   runs: Array<{ length: number; language: string | undefined }> = [];
   disposed = false;
   readonly backend = "CPU";
-  readonly capabilities: { languages: Array<string>; maxTimestampKind: string };
-  readonly path: string;
-  constructor(path: string) {
-    this.path = path;
-    this.capabilities = {
-      languages: ["de", "en"],
-      maxTimestampKind: path.includes("canary") ? "none" : "word",
-    };
-  }
+  readonly capabilities = { languages: ["de", "en"] };
   static async load(path: string) {
     FakeModel.loads.push(path);
-    return new FakeModel(path);
+    return new FakeModel();
   }
   createSession() {
     return {
-      run: async (pcm: Float32Array, opts: { language?: string; timestamps?: string }) => {
-        if (this.path.includes("canary")) {
-          if (opts.timestamps !== undefined) throw new Error("unsupported timestamp granularity");
-          return { text: "Canary Text", aborted: false, words: [] };
-        }
-        if (FakeModel.timesNothing) return { text: "", aborted: false, words: [] };
+      run: async (pcm: Float32Array, opts: { language?: string }) => {
         this.runs.push({ length: pcm.length, language: opts.language });
         FakeModel.runLengths.push(pcm.length);
         if (FakeModel.runError !== undefined) throw FakeModel.runError;
-        return {
-          text: "  Hallo   Welt ",
-          aborted: false,
-          words: [
-            { text: " Hallo", t0Ms: 100, t1Ms: 400 },
-            { text: " Welt", t0Ms: 1_600, t1Ms: 1_800 },
-          ],
-        };
+        return { text: "  Hallo   Welt ", aborted: false };
       },
       dispose: () => undefined,
     };
@@ -235,7 +185,6 @@ class FakeModel {
   }
   dispose() {
     this.disposed = true;
-    FakeModel.disposedPaths.push(this.path);
   }
 }
 
@@ -252,14 +201,12 @@ const fakeModule = {
 const makeEngine = (
   resolveModel = async () => "model.gguf",
   resolveVadModel?: () => Promise<string | undefined>,
-  resolveTimingModel?: () => Promise<string | undefined>,
 ) => {
   let now = 0;
   const engine = new DictationEngine({
     loadModule: async () => fakeModule as unknown as TranscribeModule,
     resolveModel,
     ...(resolveVadModel ? { resolveVadModel } : {}),
-    ...(resolveTimingModel ? { resolveTimingModel } : {}),
     idleUnloadMs: 60_000,
     now: () => now,
   });
@@ -281,74 +228,6 @@ describe("DictationEngine", () => {
     engine.append("a", "de-DE", speech(2));
     expect(await engine.finish("a")).toEqual({ text: "Hallo Welt" });
     expect(FakeModel.loads).toEqual(["model.gguf"]);
-  });
-
-  it("times words on the recording's clock only when asked to", async () => {
-    FakeModel.vadSegments = [
-      { startSample: SAMPLE_RATE, endSample: 2 * SAMPLE_RATE },
-      { startSample: 9 * SAMPLE_RATE, endSample: 10 * SAMPLE_RATE },
-    ];
-    const { engine } = makeEngine(undefined, async () => "vad.gguf");
-    engine.append("a", "de", speech(10));
-    expect(await engine.finish("a", { words: true })).toEqual({
-      text: "Hallo Welt",
-      words: [
-        { text: "Hallo", t0: 1_100, t1: 1_400 },
-        { text: "Welt", t0: 9_200, t1: 9_400 },
-      ],
-    });
-    engine.append("b", "de", speech(10));
-    expect(await engine.finish("b")).toEqual({ text: "Hallo Welt" });
-    FakeModel.vadSegments = [];
-  });
-
-  describe("when the main model cannot time words", () => {
-    const canary = async () => "canary.gguf";
-    const parakeet = async () => "parakeet.gguf";
-
-    it("lets the timing model write a capture and lets go of it afterwards", async () => {
-      FakeModel.disposedPaths = [];
-      const { engine } = makeEngine(canary, undefined, parakeet);
-      engine.append("a", "de", speech(3));
-      expect(await engine.finish("a", { words: true })).toEqual({
-        text: "Hallo Welt",
-        words: [
-          { text: "Hallo", t0: 100, t1: 400 },
-          { text: "Welt", t0: 1_600, t1: 1_800 },
-        ],
-      });
-      expect(FakeModel.disposedPaths).toEqual(["parakeet.gguf"]);
-    });
-
-    it("leaves dictation with the main model", async () => {
-      FakeModel.loads = [];
-      const { engine } = makeEngine(canary, undefined, parakeet);
-      engine.append("a", "de", speech(3));
-      expect(await engine.finish("a")).toEqual({ text: "Canary Text" });
-      expect(FakeModel.loads).toEqual(["canary.gguf"]);
-    });
-
-    it("keeps the words untimed when no timing model is installed", async () => {
-      const { engine } = makeEngine(canary, undefined, async () => undefined);
-      engine.append("a", "de", speech(3));
-      expect(await engine.finish("a", { words: true })).toEqual({ text: "Canary Text" });
-    });
-
-    it("keeps the words untimed when the timing model hears nothing", async () => {
-      FakeModel.timesNothing = true;
-      const { engine } = makeEngine(canary, undefined, parakeet);
-      engine.append("a", "de", speech(3));
-      expect(await engine.finish("a", { words: true })).toEqual({ text: "Canary Text" });
-      FakeModel.timesNothing = false;
-    });
-
-    it("keeps the words untimed when the timing model cannot load", async () => {
-      const { engine } = makeEngine(canary, undefined, async () => {
-        throw new Error("broken file");
-      });
-      engine.append("a", "de", speech(3));
-      expect(await engine.finish("a", { words: true })).toEqual({ text: "Canary Text" });
-    });
   });
 
   it("transcribes a long recording in pieces and joins them", async () => {
