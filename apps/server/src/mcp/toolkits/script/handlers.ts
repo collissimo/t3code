@@ -61,7 +61,7 @@ export class ScriptT3Tools extends Context.Service<
       readonly arguments: object;
     }) => Effect.Effect<
       McpSchema.CallToolResult,
-      McpSchema.InternalError | McpSchema.InvalidParams,
+      McpSchema.McpErrorBase,
       McpSchema.McpServerClient
     >;
   }

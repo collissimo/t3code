@@ -188,6 +188,7 @@ class FakeModel {
   }
 }
 
+// @effect-diagnostics-next-line extendsNativeError:off - stands in for transcribe-cpp's native Error classes.
 class FakeOutputTruncated extends Error {
   partialResult = { text: "Bis hier" };
 }

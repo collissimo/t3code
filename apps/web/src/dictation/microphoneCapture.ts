@@ -1,5 +1,6 @@
 // Records the microphone as 16 kHz mono 16-bit PCM for server-side dictation.
 
+// @effect-diagnostics-next-line extendsNativeError:off - thrown from plain browser code, never in an Effect failure channel.
 export class MicrophoneUnavailableError extends Error {
   constructor(
     message: string,
