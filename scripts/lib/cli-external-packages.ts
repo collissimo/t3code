@@ -9,6 +9,10 @@ const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "ffi-rs",
   "@yuuang/",
   "@ff-labs/",
+  "transcribe-cpp",
+  "@transcribe-cpp/",
+  "koffi",
+  "@koromix/",
   "@napi-rs/keyring",
   // Dictation: transcribe.cpp finds its platform package beside it and dlopens the DLLs in it.
   "transcribe-cpp",
