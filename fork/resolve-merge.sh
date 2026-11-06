@@ -83,7 +83,8 @@ if [[ ${#unresolved[@]} -gt 0 ]]; then
 fi
 
 # Without the repository's commit hooks: they would lint the whole merge on the commit below.
-VP_GIT_HOOKS=0 vp install
+# pnpm freezes the lockfile under CI, which would refuse the fork's additions to upstream's.
+VP_GIT_HOOKS=0 vp install --no-frozen-lockfile
 
 # A clean textual merge can still break the build: one side calls what the other renamed or
 # stopped importing, in a file git merged without a conflict. And collin/main itself may not
