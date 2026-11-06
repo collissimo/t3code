@@ -10,8 +10,13 @@ failed=0
 
 mkdir "$root/bin"
 # Reports whatever $TSC_LINE says while the file it names (relative to the app) holds BROKEN.
+# Installs like pnpm in CI: the lockfile is frozen unless the call says otherwise.
 cat > "$root/bin/vp" <<'STUB'
 #!/usr/bin/env bash
+if [[ "$1" == install && -n "${CI:-}" && " $* " != *" --no-frozen-lockfile "* ]]; then
+  echo "Error: ERR_PNPM_OUTDATED_LOCKFILE" >&2
+  exit 1
+fi
 [[ "$1" == run && "$(basename "$PWD")" == server ]] || exit 0
 if grep -rqs BROKEN src ../../packages; then
   printf '~/apps/server$ tsc --noEmit\n%b\n' "$TSC_LINE"
@@ -24,7 +29,7 @@ for file in $(git diff --name-only --diff-filter=U); do git rm -q -f -- "$file";
 grep -rl BROKEN apps packages | xargs -r sed -i 's/BROKEN/fixed/'
 STUB
 chmod +x "$root/bin/vp" "$root/bin/claude"
-export PATH="$root/bin:$PATH" CLAUDE_CODE_OAUTH_TOKEN=test
+export PATH="$root/bin:$PATH" CLAUDE_CODE_OAUTH_TOKEN=test CI=true
 
 new_repo() {
   git init -q -b base "$1"
