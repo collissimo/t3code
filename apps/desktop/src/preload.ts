@@ -129,6 +129,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   dictationAppend: (input) => ipcRenderer.invoke(IpcChannels.DICTATION_APPEND_CHANNEL, input),
   dictationFinish: (input) => ipcRenderer.invoke(IpcChannels.DICTATION_FINISH_CHANNEL, input),
   dictationCancel: (input) => ipcRenderer.invoke(IpcChannels.DICTATION_CANCEL_CHANNEL, input),
+  getHostEnvironmentId: () => ipcRenderer.invoke(IpcChannels.GET_HOST_ENVIRONMENT_ID_CHANNEL),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),

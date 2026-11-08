@@ -41,6 +41,7 @@ export const SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:set-local-environm
 export const DICTATION_APPEND_CHANNEL = "desktop:dictation-append";
 export const DICTATION_FINISH_CHANNEL = "desktop:dictation-finish";
 export const DICTATION_CANCEL_CHANNEL = "desktop:dictation-cancel";
+export const GET_HOST_ENVIRONMENT_ID_CHANNEL = "desktop:get-host-environment-id";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
