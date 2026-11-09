@@ -129,6 +129,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   dictationAppend: (input) => ipcRenderer.invoke(IpcChannels.DICTATION_APPEND_CHANNEL, input),
   dictationFinish: (input) => ipcRenderer.invoke(IpcChannels.DICTATION_FINISH_CHANNEL, input),
   dictationCancel: (input) => ipcRenderer.invoke(IpcChannels.DICTATION_CANCEL_CHANNEL, input),
+  getHostEnvironmentId: () => ipcRenderer.invoke(IpcChannels.GET_HOST_ENVIRONMENT_ID_CHANNEL),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
@@ -287,6 +288,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     getState: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_GET_STATE_CHANNEL),
     install: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_INSTALL_CHANNEL),
     uninstall: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_UNINSTALL_CHANNEL),
+    addToPath: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_ADD_TO_PATH_CHANNEL),
   },
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
