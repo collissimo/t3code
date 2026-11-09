@@ -3687,6 +3687,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onToggle={toggleDictationStable}
                     language={dictation.language}
                     onLanguageChange={dictation.setLanguage}
+                    engine={dictation.engine}
+                    onEngineChange={dictation.setEngine}
                     dictateShortcutLabel={shortcutLabelForCommand(keybindings, "composer.dictate")}
                     structuredShortcutLabel={shortcutLabelForCommand(
                       keybindings,

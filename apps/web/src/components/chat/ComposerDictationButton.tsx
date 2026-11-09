@@ -6,12 +6,16 @@ import {
   SparklesIcon,
 } from "lucide-react";
 
-import { DICTATION_LANGUAGES } from "../../dictation/dictationLanguages";
+import type { DictationEngineKind } from "@t3tools/contracts";
+
+import { DICTATION_ENGINES, DICTATION_LANGUAGES } from "../../dictation/dictationLanguages";
 import type { DictationState } from "../../dictation/useDictation";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import {
   Menu,
+  MenuGroup,
+  MenuGroupLabel,
   MenuItem,
   MenuPopup,
   MenuRadioGroup,
@@ -32,7 +36,7 @@ const NOTICE_TONES = {
 
 /**
  * Mic button in the composer footer, with the live transcript and status floating above it and
- * the menu of spoken languages behind the arrow beside it.
+ * the menu of who transcribes and the spoken language behind the arrow beside it.
  */
 export function ComposerDictationButton(props: {
   readonly state: DictationState;
@@ -43,17 +47,22 @@ export function ComposerDictationButton(props: {
   readonly onOpenHistory: () => void;
   readonly language: string;
   readonly onLanguageChange: (language: string) => void;
+  readonly engine: DictationEngineKind;
+  readonly onEngineChange: (engine: DictationEngineKind) => void;
 }) {
   const { phase, preview, structured, notice } = props.state;
   const composerMenuProps = useComposerMenuProps();
   const languageName =
     DICTATION_LANGUAGES.find((entry) => entry.code === props.language)?.name ?? props.language;
+  const engineName =
+    DICTATION_ENGINES.find((entry) => entry.kind === props.engine)?.name ?? props.engine;
+  const menuLabel = `Dictation: ${engineName}, ${languageName}`;
   const recording = phase === "recording";
   const busy = phase === "starting" || phase === "transcribing" || phase === "structuring";
   const status = recording
     ? structured
-      ? "Recording, will be structured"
-      : "Recording"
+      ? `Recording with ${engineName}, will be structured`
+      : `Recording with ${engineName}`
     : phase === "transcribing"
       ? "Transcribing…"
       : phase === "structuring"
@@ -152,7 +161,7 @@ export function ComposerDictationButton(props: {
                     variant="ghost"
                     size="icon-micro"
                     disabled={phase !== "idle"}
-                    aria-label={`Dictation language: ${languageName}`}
+                    aria-label={menuLabel}
                   />
                 }
               />
@@ -160,16 +169,30 @@ export function ComposerDictationButton(props: {
           >
             <ChevronDownIcon />
           </TooltipTrigger>
-          <TooltipPopup>{`Dictation language: ${languageName}`}</TooltipPopup>
+          <TooltipPopup>{menuLabel}</TooltipPopup>
         </Tooltip>
         <MenuPopup side="top" align="start" {...composerMenuProps}>
-          <MenuRadioGroup value={props.language} onValueChange={props.onLanguageChange}>
-            {DICTATION_LANGUAGES.map((entry) => (
-              <MenuRadioItem key={entry.code} value={entry.code}>
-                {entry.name}
-              </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
+          <MenuGroup>
+            <MenuGroupLabel>Transcribe with</MenuGroupLabel>
+            <MenuRadioGroup value={props.engine} onValueChange={props.onEngineChange}>
+              {DICTATION_ENGINES.map((entry) => (
+                <MenuRadioItem key={entry.kind} value={entry.kind}>
+                  {entry.name}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
+          <MenuSeparator />
+          <MenuGroup>
+            <MenuGroupLabel>Language</MenuGroupLabel>
+            <MenuRadioGroup value={props.language} onValueChange={props.onLanguageChange}>
+              {DICTATION_LANGUAGES.map((entry) => (
+                <MenuRadioItem key={entry.code} value={entry.code}>
+                  {entry.name}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
           <MenuSeparator />
           <MenuItem onClick={props.onOpenHistory}>
             <HistoryIcon />

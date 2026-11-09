@@ -13,8 +13,17 @@ const DICTATION_MAX_CHUNK_CHARS = 2_000_000;
 export const DictationSessionId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 export type DictationSessionId = typeof DictationSessionId.Type;
 
+/**
+ * Who transcribes a recording: the local speech model, or the Claude Code or Codex (ChatGPT)
+ * sign-in on the transcribing machine. Exactly one of them receives a recording's audio.
+ */
+export const DictationEngineKind = Schema.Literals(["local", "claude", "codex"]);
+export type DictationEngineKind = typeof DictationEngineKind.Type;
+
 export const DictationAppendInput = Schema.Struct({
   sessionId: DictationSessionId,
+  /** Fixed by a session's first append; omitted means the local model. */
+  engine: Schema.optional(DictationEngineKind),
   /** BCP 47 or ISO 639-1 code of the spoken language; omitted lets the model detect it. */
   language: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(35))),
   /** Base64 of the PCM recorded since the previous append. May be empty. */

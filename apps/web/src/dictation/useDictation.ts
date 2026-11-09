@@ -3,9 +3,11 @@ import { markDictatedText } from "@t3tools/client-runtime/voice-input/dictationM
 import type {
   DesktopDictationOutcome,
   DictationAppendInput,
+  DictationEngineKind,
   DictationFinishResult,
   EnvironmentId,
 } from "@t3tools/contracts";
+import { DictationEngineKind as DictationEngineKindSchema } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
 
@@ -28,6 +30,7 @@ import { DEFAULT_DICTATION_LANGUAGE } from "./dictationLanguages";
 const SEND_INTERVAL_MS = 500;
 // A new key: the old one may hold a choice made when a flag still showed it, now easy to overlook.
 const LANGUAGE_KEY = "t3code:dictation-language-v2";
+const ENGINE_KEY = "t3code:dictation-engine";
 
 export type DictationPhase = "idle" | "starting" | "recording" | "transcribing" | "structuring";
 
@@ -47,6 +50,8 @@ export interface DictationState {
 
 interface Recording {
   readonly sessionId: string;
+  /** Chosen when the recording starts; a change mid-recording applies to the next one. */
+  readonly engine: DictationEngineKind;
   readonly capture: MicrophoneCapture;
   readonly timer: ReturnType<typeof setInterval>;
   /** Appends in flight; the finish waits for the last one. */
@@ -99,6 +104,11 @@ export function useDictation(input: {
     DEFAULT_DICTATION_LANGUAGE,
     Schema.String,
   );
+  const [engine, setEngine] = useLocalStorage<DictationEngineKind, DictationEngineKind>(
+    ENGINE_KEY,
+    "local",
+    DictationEngineKindSchema,
+  );
   const [state, setRenderedState] = useState<DictationState>(IDLE);
   // Callbacks read the state they act on from here, not from a render that may be stale.
   const stateRef = useRef(state);
@@ -114,10 +124,12 @@ export function useDictation(input: {
   const unstructuredRef = useRef<string | null>(null);
   const inputRef = useRef(input);
   const languageRef = useRef(language);
+  const engineRef = useRef(engine);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- gives the send timer and async steps the latest props
   useEffect(() => {
     inputRef.current = input;
     languageRef.current = language;
+    engineRef.current = engine;
   });
 
   // The desktop app transcribes on this computer in its own worker, whatever environment the
@@ -176,6 +188,7 @@ export function useDictation(input: {
       if (!ok) return false;
       const result = await transcribe.append({
         sessionId: recording.sessionId,
+        engine: recording.engine,
         language: languageRef.current,
         pcm,
       });
@@ -214,6 +227,7 @@ export function useDictation(input: {
     }
     const recording: Recording = {
       sessionId: randomUUID(),
+      engine: engineRef.current,
       capture,
       timer: setInterval(() => {
         void sendPcm(recording, capture.takePcm()).then((ok) => {
@@ -362,5 +376,5 @@ export function useDictation(input: {
   /** Puts an earlier dictation into the composer; a running recording carries on. */
   const insertFromHistory = (text: string) => place(text, null);
 
-  return { state, toggle, cancel, insertFromHistory, language, setLanguage };
+  return { state, toggle, cancel, insertFromHistory, language, setLanguage, engine, setEngine };
 }

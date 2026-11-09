@@ -18,12 +18,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { decodePcm16 } from "./DictationEngine.ts";
-import {
-  finishResult,
-  HOUSEKEEPING_INTERVAL_MS,
-  makeLocalDictationEngine,
-} from "./localDictation.ts";
+import { finishResult, HOUSEKEEPING_INTERVAL_MS, makeDictationEngines } from "./localDictation.ts";
 import { DEFAULT_STRUCTURE_PROMPT } from "./structurePrompt.ts";
 
 const STRUCTURE_TIMEOUT = "90 seconds";
@@ -76,7 +71,7 @@ const make = Effect.gen(function* () {
 
   const engine = yield* Effect.acquireRelease(
     Effect.sync(() =>
-      makeLocalDictationEngine((message) =>
+      makeDictationEngines((message) =>
         Effect.runForkWith(services)(Effect.logInfo(`dictation: ${message}`)),
       ),
     ),
@@ -89,7 +84,7 @@ const make = Effect.gen(function* () {
 
   const append = Effect.fn("Dictation.append")(function* (input: DictationAppendInput) {
     const preview = yield* Effect.try({
-      try: () => engine.append(input.sessionId, input.language, decodePcm16(input.pcm)),
+      try: () => engine.append(input),
       catch: toDictationError,
     });
     return { preview };
