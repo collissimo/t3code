@@ -4,6 +4,7 @@ import { replaceComposerContextReferences } from "@t3tools/shared/composerContex
 import { truncate } from "@t3tools/shared/String";
 
 import { DICTATION_MARKER } from "../voice-input/dictationMarker.ts";
+import { collectComposerModelMentions } from "../composerModelMentions.ts";
 
 export interface ThreadTitleSeedInput {
   readonly text: string;
@@ -13,6 +14,16 @@ export interface ThreadTitleSeedInput {
 
 function normalizeTitleSeed(value: string): string {
   return assistantCitationsToPlainText(value).trim().replace(/\s+/gu, " ");
+}
+
+function modelMentionsAsSlugs(value: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const mention of collectComposerModelMentions(value)) {
+    result += value.slice(cursor, mention.start) + mention.model;
+    cursor = mention.end;
+  }
+  return result + value.slice(cursor);
 }
 
 export function threadTitleTextFromPrompt(value: string): string {
@@ -26,7 +37,7 @@ export function threadTitleTextFromPrompt(value: string): string {
     return reference.label;
   });
   return (
-    normalizeTitleSeed(prose) ||
+    normalizeTitleSeed(modelMentionsAsSlugs(prose)) ||
     (imageIds.size > 0 ? (imageIds.size === 1 ? "Attached image" : "Attached images") : "")
   );
 }
