@@ -47,12 +47,16 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { formatRelativeTime } from "../../timestampFormat";
-import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import { providerInstanceEntriesFor } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/cloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
+import {
+  canArchiveScheduledTaskRuns,
+  scheduledTaskRunArchivePatch,
+} from "@t3tools/client-runtime/scheduled-task-run-archive";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -1270,6 +1274,10 @@ function ScheduledTaskEditorForm({
     );
   const scopedProjects = projectsOn(environmentId);
   const settings = useEnvironmentSettings(environmentId);
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const [archiveRuns, setArchiveRuns] = useState(
+    task !== null && settings.archiveScheduledTaskRuns.includes(task.id),
+  );
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
   const canOperate = useAtomValue(
@@ -1443,6 +1451,13 @@ function ScheduledTaskEditorForm({
       }
       return;
     }
+    const saved = result.value.task;
+    const archivePatch = scheduledTaskRunArchivePatch(
+      settings.archiveScheduledTaskRuns,
+      saved.id,
+      archiveRuns && canArchiveScheduledTaskRuns(saved),
+    );
+    if (archivePatch !== null) updateSettings(archivePatch);
     onClose();
   };
 
@@ -1555,6 +1570,23 @@ function ScheduledTaskEditorForm({
                 : undefined
             }
           />
+
+          {draft.threadMode === "new_thread" ? (
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0 space-y-1">
+                <Label htmlFor="scheduled-task-archive-runs">Archive finished runs</Label>
+                <p className="text-sm text-muted-foreground">
+                  A run's thread is archived once it completes, so it stays out of the sidebar.
+                  Failed runs stay visible.
+                </p>
+              </div>
+              <Switch
+                id="scheduled-task-archive-runs"
+                checked={archiveRuns}
+                onCheckedChange={setArchiveRuns}
+              />
+            </div>
+          ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Project" htmlFor="scheduled-task-project">

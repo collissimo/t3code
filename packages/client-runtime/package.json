@@ -75,6 +75,10 @@
       "types": "./src/scheduledTaskWebhook.ts",
       "default": "./src/scheduledTaskWebhook.ts"
     },
+    "./scheduled-task-run-archive": {
+      "types": "./src/scheduledTaskRunArchive.ts",
+      "default": "./src/scheduledTaskRunArchive.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"

@@ -158,3 +158,14 @@ can be rebound in Settings → Keybindings ("Composer: Dictate").
   `apps/web/src/components/chat/ComposerDictationButton.tsx`, `packages/contracts/src/dictation.ts`.
   The standalone app for every other program is [collissimo/t3-voice](https://github.com/collissimo/t3-voice);
   it leaves F9 to T3 Code while T3 Code is in front.
+
+### Archive finished scheduled runs
+
+A scheduled task that starts a new thread per run has an "Archive finished runs" switch in its
+editor (web and mobile). When a run completes, the server archives its thread, so it never stays
+in the sidebar; failed or interrupted runs stay visible, and so does a thread the user sent a
+follow-up in. Archived runs remain under Settings → Archived threads. The choice is the server
+setting `archiveScheduledTaskRuns` (task IDs) rather than a task column, so the fork adds no
+database migration that could collide with upstream's numbering.
+Code: `apps/server/src/scheduledTasks/ScheduledRunArchiveReactor.ts`,
+`packages/client-runtime/src/scheduledTaskRunArchive.ts`.
