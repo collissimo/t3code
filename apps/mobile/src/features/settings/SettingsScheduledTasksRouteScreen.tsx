@@ -57,6 +57,10 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
+import {
+  canArchiveScheduledTaskRuns,
+  scheduledTaskRunArchivePatch,
+} from "@t3tools/client-runtime/scheduled-task-run-archive";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";
@@ -673,6 +677,14 @@ function TaskForm({
     label: "scheduled task upsert",
     reportFailure: false,
   });
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "scheduled task run archive update",
+    reportFailure: true,
+  });
+  const archivedTaskIds = config?.settings.archiveScheduledTaskRuns ?? [];
+  const [archiveRuns, setArchiveRuns] = useState(
+    draft.task !== null && archivedTaskIds.includes(draft.task.id),
+  );
   const submissionPending = useRef(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [runAtPicker, setRunAtPicker] = useState<"date" | "time" | null>(null);
@@ -792,6 +804,15 @@ function TaskForm({
       submissionPending.current = false;
       failure("Could not save task", result);
       return;
+    }
+    const saved = result.value.task;
+    const archivePatch = scheduledTaskRunArchivePatch(
+      archivedTaskIds,
+      saved.id,
+      archiveRuns && canArchiveScheduledTaskRuns(saved),
+    );
+    if (archivePatch !== null) {
+      void updateSettings({ environmentId, input: { patch: archivePatch } });
     }
     onSaved();
   };
@@ -933,6 +954,23 @@ function TaskForm({
                   setDraft({ ...draft, threadMode: id });
               }}
             />
+            {draft.threadMode === "new_thread" ? (
+              <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
+                <View className="min-w-0 flex-1">
+                  <Text textRole="body" className="text-foreground">
+                    Archive finished runs
+                  </Text>
+                  <Text className="text-sm text-foreground-muted">
+                    Keeps completed runs out of the thread list. Failed runs stay visible.
+                  </Text>
+                </View>
+                <ThemedSwitch
+                  accessibilityLabel="Archive finished runs"
+                  value={archiveRuns}
+                  onValueChange={setArchiveRuns}
+                />
+              </View>
+            ) : null}
           </SettingsSection>
         ) : null}
 
