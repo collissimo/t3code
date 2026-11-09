@@ -2,14 +2,16 @@
 // What the server's Dictation service and the desktop app's dictation worker share: loading
 // transcribe.cpp, the engine with its model lookup, and turning a transcript into a result.
 
-import type { DictationFinishResult } from "@t3tools/contracts";
+import type { DictationAppendInput, DictationFinishResult } from "@t3tools/contracts";
 import type * as TranscribeCpp from "transcribe-cpp";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as NodePath from "node:path";
 
+import { CloudDictation } from "./cloudDictation.ts";
 import {
+  decodePcm16,
   DictationEngine,
   type TranscribeModule,
   type TranscriptResult,
@@ -67,7 +69,7 @@ const loadTranscribeCpp = async (): Promise<TranscribeModule> => {
 };
 
 /** The engine over the models installed on this machine (Hex, Scrawl or T3CODE_DICTATION_MODEL). */
-export function makeLocalDictationEngine(log: (message: string) => void): DictationEngine {
+function makeLocalDictationEngine(log: (message: string) => void): DictationEngine {
   const configured = process.env.T3CODE_DICTATION_MODEL?.trim() || undefined;
   const resolveModel = Effect.fn("dictation.resolveModel")(function* (
     language: string | undefined,
@@ -97,4 +99,50 @@ export function finishResult(result: TranscriptResult): DictationFinishResult {
   const cleaned = splitCodeword(removeFillers(result.text), DEFAULT_STRUCTURE_CODEWORDS);
   if (cleaned.text === "") return { text: "", reason: "no-speech", structureRequested: false };
   return { text: cleaned.text, structureRequested: cleaned.found };
+}
+
+export interface DictationEngines {
+  readonly append: (input: DictationAppendInput) => string;
+  readonly finish: (sessionId: string) => Promise<TranscriptResult>;
+  readonly cancel: (sessionId: string) => void;
+  readonly housekeeping: () => void;
+  readonly dispose: () => Promise<void>;
+}
+
+/**
+ * Routes each recording to the one engine it chose. A cloud recording never reaches the local
+ * model, which is let go when one starts; a local recording never leaves this machine.
+ */
+export function makeDictationEngines(
+  log: (message: string) => void,
+  local: Pick<
+    DictationEngine,
+    "append" | "finish" | "cancel" | "housekeeping" | "dispose" | "releaseModel"
+  > = makeLocalDictationEngine(log),
+  cloud: CloudDictation = new CloudDictation(),
+): DictationEngines {
+  return {
+    append: ({ sessionId, engine = "local", language, pcm }) => {
+      if (engine === "local") return local.append(sessionId, language, decodePcm16(pcm));
+      if (!cloud.has(sessionId)) {
+        local.releaseModel();
+        log(`dictating with the ${engine} sign-in`);
+      }
+      return cloud.append(sessionId, engine, language, Buffer.from(pcm, "base64"));
+    },
+    finish: (sessionId) =>
+      cloud.has(sessionId) ? cloud.finish(sessionId) : local.finish(sessionId),
+    cancel: (sessionId) => {
+      cloud.cancel(sessionId);
+      local.cancel(sessionId);
+    },
+    housekeeping: () => {
+      cloud.housekeeping();
+      local.housekeeping();
+    },
+    dispose: async () => {
+      cloud.dispose();
+      await local.dispose();
+    },
+  };
 }

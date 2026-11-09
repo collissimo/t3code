@@ -243,6 +243,14 @@ export class DictationEngine {
     if (this.#sessions.size === 0) this.#previewAbort?.abort();
   }
 
+  /** Lets go of the model now unless a recording uses it, e.g. when another engine takes over. */
+  releaseModel(): void {
+    if (this.#sessions.size > 0 || this.#loaded === undefined || this.#loading !== undefined)
+      return;
+    this.#options.log?.("another engine dictates, letting go of the speech model");
+    void this.#unload();
+  }
+
   get modelLoaded(): boolean {
     return this.#loaded !== undefined;
   }

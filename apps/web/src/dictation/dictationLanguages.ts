@@ -1,3 +1,5 @@
+import type { DictationEngineKind } from "@t3tools/contracts";
+
 // Languages the dictation models transcribe.
 export const DICTATION_LANGUAGES: ReadonlyArray<{
   readonly code: string;
@@ -13,3 +15,13 @@ export const DICTATION_LANGUAGES: ReadonlyArray<{
 ];
 
 export const DEFAULT_DICTATION_LANGUAGE = "de";
+
+/** Who transcribes; only the chosen one ever receives a recording. */
+export const DICTATION_ENGINES: ReadonlyArray<{
+  readonly kind: DictationEngineKind;
+  readonly name: string;
+}> = [
+  { kind: "local", name: "Local model" },
+  { kind: "claude", name: "Claude Code" },
+  { kind: "codex", name: "Codex" },
+];

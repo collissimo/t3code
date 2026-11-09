@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -13,7 +13,8 @@ import {
   splitAtPauses,
   type TranscribeModule,
 } from "./DictationEngine.ts";
-import { dictationBackend } from "./localDictation.ts";
+import { CloudDictation } from "./cloudDictation.ts";
+import { dictationBackend, finishResult, makeDictationEngines } from "./localDictation.ts";
 import { findModel, findVadModel, rankModels } from "./modelFiles.ts";
 import { handleDictationWorkerRequest } from "./worker.ts";
 
@@ -341,7 +342,7 @@ describe("dictation worker", () => {
   };
 
   it("answers each request by id with a cleaned transcript", async () => {
-    const { engine } = makeEngine();
+    const engine = makeDictationEngines(() => undefined, makeEngine().engine);
     const appended = await handleDictationWorkerRequest(engine, {
       id: 1,
       method: "append",
@@ -356,9 +357,12 @@ describe("dictation worker", () => {
   });
 
   it("turns an engine failure into a reason instead of crashing", async () => {
-    const { engine } = makeEngine(async () => {
-      throw new Error("No Parakeet model found.");
-    });
+    const engine = makeDictationEngines(
+      () => undefined,
+      makeEngine(async () => {
+        throw new Error("No Parakeet model found.");
+      }).engine,
+    );
     const request = {
       id: 3,
       method: "append",
@@ -373,5 +377,122 @@ describe("dictation worker", () => {
       ok: false,
       reason: "No Parakeet model found.",
     });
+  });
+});
+
+class FakeClaudeStream extends EventTarget {
+  static last: FakeClaudeStream | undefined;
+  readonly sent: Array<unknown> = [];
+  readonly url: string;
+  readonly init: { readonly headers: Record<string, string> };
+  constructor(url: string, init: { readonly headers: Record<string, string> }) {
+    super();
+    this.url = url;
+    this.init = init;
+    FakeClaudeStream.last = this;
+    queueMicrotask(() => this.dispatchEvent(new Event("open")));
+  }
+  #frame(frame: object) {
+    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+  }
+  send(data: unknown) {
+    this.sent.push(data);
+    if (data !== '{"type":"CloseStream"}') {
+      this.#frame({ type: "TranscriptText", data: "Hallo" });
+      return;
+    }
+    this.#frame({ type: "TranscriptText", data: "Hallo Claude" });
+    this.#frame({ type: "TranscriptEndpoint" });
+    this.#frame({ type: "TranscriptText", data: "Reinschrift" });
+    this.close();
+  }
+  close() {
+    this.dispatchEvent(Object.assign(new Event("close"), { code: 1000 }));
+  }
+}
+
+describe("dictation engines", () => {
+  const pcm = (seconds: number) => Buffer.alloc(seconds * SAMPLE_RATE * 2, 0x20).toString("base64");
+  const signedIn = {
+    claude: { accessToken: "claude-token", expiresAt: Number.MAX_SAFE_INTEGER },
+    codex: { accessToken: "chatgpt-token", accountId: "workspace" },
+  };
+
+  it("sends a cloud recording only to its sign-in, and lets go of the local model", async () => {
+    FakeModel.loads = [];
+    const { engine: local } = makeEngine();
+    const upload = vi.fn<typeof fetch>(async () => Response.json({ text: "Hallo Codex" }));
+    using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(upload);
+    const engines = makeDictationEngines(
+      () => undefined,
+      local,
+      new CloudDictation({ logins: async () => signedIn }),
+    );
+    engines.append({ sessionId: "local", language: "de", pcm: pcm(1) });
+    expect(await engines.finish("local")).toEqual({ text: "Hallo Welt" });
+    expect(local.modelLoaded).toBe(true);
+    expect(upload).not.toHaveBeenCalled();
+
+    expect(engines.append({ sessionId: "c", engine: "codex", language: "de", pcm: pcm(1) })).toBe(
+      "",
+    );
+    await flushMicrotasks();
+    expect(local.modelLoaded).toBe(false);
+    expect(await engines.finish("c")).toEqual({ text: "Hallo Codex" });
+    expect(FakeModel.loads).toEqual(["model.gguf"]);
+    const [[url, init]] = upload.mock.calls as unknown as [[string, RequestInit]];
+    expect(url).toBe("https://chatgpt.com/backend-api/transcribe");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer chatgpt-token");
+    expect(new Headers(init.headers).get("chatgpt-account-id")).toBe("workspace");
+    const wav = Buffer.from(await ((init.body as FormData).get("file") as Blob).arrayBuffer());
+    expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
+    expect(wav.byteLength).toBe(44 + SAMPLE_RATE * 2);
+  });
+
+  it("streams a Claude recording for a live preview and keeps its codeword", async () => {
+    vi.stubGlobal("WebSocket", FakeClaudeStream);
+    try {
+      const { engine: local } = makeEngine();
+      const appendLocal = vi.spyOn(local, "append");
+      const engines = makeDictationEngines(
+        () => undefined,
+        local,
+        new CloudDictation({ logins: async () => signedIn }),
+      );
+      const chunk = { sessionId: "s", engine: "claude", language: "de-DE", pcm: pcm(1) } as const;
+      engines.append(chunk);
+      await flushMicrotasks();
+      expect(engines.append(chunk)).toBe("Hallo");
+      const stream = FakeClaudeStream.last!;
+      expect(stream.init.headers.authorization).toBe("Bearer claude-token");
+      expect(new URL(stream.url).searchParams.get("language")).toBe("de");
+      expect(stream.sent.filter((data) => data instanceof Uint8Array)).toHaveLength(2);
+      expect(finishResult(await engines.finish("s"))).toEqual({
+        text: "Hallo Claude",
+        structureRequested: true,
+      });
+      expect(appendLocal).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses a cloud recording without a sign-in and sends nothing", async () => {
+    vi.stubGlobal("WebSocket", FakeClaudeStream);
+    try {
+      FakeClaudeStream.last = undefined;
+      const engines = makeDictationEngines(
+        () => undefined,
+        makeEngine().engine,
+        new CloudDictation({ logins: async () => ({ claude: undefined, codex: undefined }) }),
+      );
+      const chunk = { sessionId: "s", engine: "claude", pcm: pcm(1) } as const;
+      engines.append(chunk);
+      await flushMicrotasks();
+      expect(() => engines.append(chunk)).toThrow(/Sign in to Claude Code/);
+      expect(FakeClaudeStream.last).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

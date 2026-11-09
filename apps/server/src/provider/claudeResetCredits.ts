@@ -5,11 +5,12 @@ import type {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+
+import { readClaudeLogin, readJsonFile } from "./subscriptionLogins.ts";
 
 const API_BASE = "https://api.anthropic.com";
 const PROGRAM = "cedar_ember";
@@ -17,9 +18,6 @@ const GRANT_ID = /^[a-z0-9_-]{1,40}$/;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const COMPLETE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-const Credentials = Schema.Struct({
-  claudeAiOauth: Schema.optional(Schema.Struct({ accessToken: Schema.optional(Schema.String) })),
-});
 const Config = Schema.Struct({
   oauthAccount: Schema.optional(
     Schema.Struct({ organizationUuid: Schema.optional(Schema.String) }),
@@ -120,28 +118,8 @@ export function claudeResetCreditsToContract(
   };
 }
 
-const readJson = Effect.fn("claudeResetCredits.readJson")(function* <S extends Schema.Top>(
-  schema: S,
-  file: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  return yield* fs.readFileString(file).pipe(
-    Effect.catchTags({
-      PlatformError: (error) =>
-        error.reason._tag === "NotFound" ? Effect.succeed("{}") : Effect.fail(error),
-    }),
-    Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(schema))),
-  );
-});
-
-const readAccessToken = Effect.fn("claudeResetCredits.readAccessToken")(function* (
-  configDir: string,
-) {
-  if ((yield* HostProcess.Platform) === "darwin") return undefined;
-  const path = yield* Path.Path;
-  const credentials = yield* readJson(Credentials, path.join(configDir, ".credentials.json"));
-  return credentials.claudeAiOauth?.accessToken?.trim() || undefined;
-});
+const readAccessToken = (configDir: string) =>
+  readClaudeLogin(configDir).pipe(Effect.map((login) => login?.accessToken));
 
 const withClaudeHeaders = (token: string, version: string) =>
   HttpClientRequest.setHeaders({
@@ -173,7 +151,7 @@ export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
 );
 
 export const readClaudeOrganizationId = (accountConfigPath: string) =>
-  readJson(Config, accountConfigPath).pipe(
+  readJsonFile(Config, accountConfigPath).pipe(
     Effect.map((config) => config.oauthAccount?.organizationUuid?.trim() || undefined),
     Effect.orElseSucceed(() => undefined),
   );
@@ -208,7 +186,7 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   const token = yield* readAccessToken(input.configDir).pipe(
     Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "loginUnreadable", cause })),
   );
-  const config = yield* readJson(Config, input.accountConfigPath).pipe(
+  const config = yield* readJsonFile(Config, input.accountConfigPath).pipe(
     Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "accountUnreadable", cause })),
   );
   const organization = config.oauthAccount?.organizationUuid?.trim();

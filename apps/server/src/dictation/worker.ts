@@ -4,23 +4,24 @@
 // the microphone audio it is sent and the speech model files. The channel, not stdout, carries
 // the protocol because the native library may print to stdout.
 
-import type { DictationAppendResult, DictationFinishResult } from "@t3tools/contracts";
+import type {
+  DictationAppendInput,
+  DictationAppendResult,
+  DictationFinishResult,
+} from "@t3tools/contracts";
 
-import { decodePcm16, type DictationEngine } from "./DictationEngine.ts";
 import {
+  type DictationEngines,
   finishResult,
   HOUSEKEEPING_INTERVAL_MS,
-  makeLocalDictationEngine,
+  makeDictationEngines,
 } from "./localDictation.ts";
 
 export type DictationWorkerRequest =
-  | {
+  | ({
       readonly id: number;
       readonly method: "append";
-      readonly sessionId: string;
-      readonly language: string | undefined;
-      readonly pcm: string;
-    }
+    } & DictationAppendInput)
   | { readonly id: number; readonly method: "finish"; readonly sessionId: string }
   | { readonly id: number; readonly method: "cancel"; readonly sessionId: string };
 
@@ -33,7 +34,7 @@ export type DictationWorkerResponse =
   | { readonly id: number; readonly ok: false; readonly reason: string };
 
 export async function handleDictationWorkerRequest(
-  engine: DictationEngine,
+  engine: DictationEngines,
   request: DictationWorkerRequest,
 ): Promise<DictationWorkerResponse> {
   try {
@@ -42,9 +43,7 @@ export async function handleDictationWorkerRequest(
         return {
           id: request.id,
           ok: true,
-          value: {
-            preview: engine.append(request.sessionId, request.language, decodePcm16(request.pcm)),
-          },
+          value: { preview: engine.append(request) },
         };
       case "finish":
         return {
@@ -71,7 +70,7 @@ export function runDictationWorker(): void {
     console.error("dictation-worker needs an IPC channel; the desktop app starts it.");
     process.exit(2);
   }
-  const engine = makeLocalDictationEngine((message) => console.error(`dictation: ${message}`));
+  const engine = makeDictationEngines((message) => console.error(`dictation: ${message}`));
   const housekeeping = setInterval(() => engine.housekeeping(), HOUSEKEEPING_INTERVAL_MS);
   process.on("message", (message: unknown) => {
     const request = message as DictationWorkerRequest;
