@@ -5,6 +5,7 @@ import type {
   ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 
@@ -14,6 +15,8 @@ import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorag
 export interface VersionMismatch {
   readonly clientVersion: string;
   readonly serverVersion: string;
+  /** The version an update moves the server to: the client's, or the newest stable release. */
+  readonly targetVersion: string;
   readonly hint: string;
 }
 
@@ -73,6 +76,7 @@ export function resolveVersionMismatch(
   return {
     clientVersion: normalizedClientVersion,
     serverVersion: normalizedServerVersion,
+    targetVersion: normalizedClientVersion,
     hint: "Version mismatch. Try syncing the client and server to the same T3 Code version.",
   };
 }
@@ -83,9 +87,17 @@ function isForkBuild(version: string): boolean {
   return prerelease?.[0] === "nightly" && Number(prerelease[2]) >= 10_000;
 }
 
+/**
+ * `stableRelease` is the newest stable release, when known. A stable server that updates itself
+ * stays on stable while this client runs another track: it is offered that release instead of
+ * the client's version, which it could only reach by switching tracks.
+ */
 export function resolveServerConfigVersionMismatch(
   serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
-  clientVersion: string = APP_VERSION,
+  {
+    clientVersion = APP_VERSION,
+    stableRelease = null,
+  }: { readonly clientVersion?: string; readonly stableRelease?: string | null } = {},
 ): VersionMismatch | null {
   const serverVersion = serverConfig?.environment.serverVersion;
   // A desktop app updates only from the feed it was built for, so a desktop-managed server on
@@ -97,7 +109,28 @@ export function resolveServerConfigVersionMismatch(
   ) {
     return null;
   }
+  if (
+    stableRelease !== null &&
+    followsStableReleases(serverConfig) &&
+    cliReleaseChannelOf(clientVersion) !== "stable"
+  ) {
+    const behind = resolveVersionMismatch(serverVersion, stableRelease);
+    return behind && { ...behind, clientVersion, hint: STABLE_UPDATE_HINT };
+  }
   return resolveVersionMismatch(serverVersion, clientVersion);
+}
+
+const STABLE_UPDATE_HINT = "A newer stable release is available for this server.";
+
+/** A stable server whose own updater (or its operator) moves it, not a desktop app's feed. */
+export function followsStableReleases(
+  serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
+): boolean {
+  return (
+    serverConfig != null &&
+    resolveServerSelfUpdateCapability(serverConfig) !== "desktop-managed" &&
+    cliReleaseChannelOf(serverConfig.environment.serverVersion) === "stable"
+  );
 }
 
 export function resolveServerSelfUpdateCapability(
@@ -127,9 +160,9 @@ export function manualServerUpdateCommand(
 
 export function buildVersionMismatchDismissalKey(
   environmentId: EnvironmentId,
-  mismatch: Pick<VersionMismatch, "clientVersion" | "serverVersion">,
+  mismatch: Pick<VersionMismatch, "targetVersion" | "serverVersion">,
 ): string {
-  return `${environmentId}:${mismatch.clientVersion}:${mismatch.serverVersion}`;
+  return `${environmentId}:${mismatch.targetVersion}:${mismatch.serverVersion}`;
 }
 
 function readVersionMismatchDismissals(): VersionMismatchDismissals {

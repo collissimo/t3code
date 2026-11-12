@@ -15,6 +15,7 @@ import {
   resolveServerSelfUpdateCapability,
   supportsDesktopAppUpdate,
 } from "~/versionSkew";
+import { useStableServerRelease } from "~/state/npmRelease";
 import {
   ServerUpdateAction,
   ServerUpdateProgress,
@@ -40,8 +41,11 @@ export function useAutoBalanceUpdateBanner(
   const [dismissedNotices, setDismissedNotices] = useState<ReadonlySet<string | ServerUpdateState>>(
     () => new Set(),
   );
+  const stableRelease = useStableServerRelease();
   const machines = states.flatMap(({ environment, state }) => {
-    const mismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
+    const mismatch = resolveServerConfigVersionMismatch(environment.serverConfig, {
+      stableRelease,
+    });
     const dismissKey = mismatch
       ? buildVersionMismatchDismissalKey(environment.environmentId, mismatch)
       : null;
@@ -62,7 +66,7 @@ export function useAutoBalanceUpdateBanner(
         selfUpdate,
         installation: environment.serverConfig?.environment.capabilities.serverInstallation,
         desktopAppUpdate,
-        targetVersion: state.status === "idle" ? mismatch!.clientVersion : state.targetVersion,
+        targetVersion: state.status === "idle" ? mismatch!.targetVersion : state.targetVersion,
         connected: environment.connection.phase === "connected",
         remoteUpdate: selfUpdate !== null && (selfUpdate !== "desktop-managed" || desktopAppUpdate),
         state,

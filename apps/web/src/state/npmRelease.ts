@@ -1,10 +1,14 @@
+import { useAtomValue } from "@effect/atom-react";
 import { type ServerConfig, ServerNpmReleaseError } from "@t3tools/contracts";
+import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 
+import { APP_VERSION } from "~/branding";
+import { followsStableReleases } from "~/versionSkew";
 import { environmentSummaries } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { serverEnvironment } from "./server";
@@ -57,3 +61,19 @@ export const npmReleaseAtom = Atom.family((spec: string) =>
       );
   }).pipe(Atom.withLabel(`npm-release:${spec}`)),
 );
+
+/** The newest stable release, looked up only while this client is off stable and a server that
+ * follows stable releases is connected. Null when unknown. */
+const stableServerReleaseAtom = Atom.make((get) => {
+  if (cliReleaseChannelOf(APP_VERSION) === "stable") return null;
+  const connected = get(environmentSummaries.connectedEnvironmentIdsAtom);
+  if (!connected.some((id) => followsStableReleases(get(serverEnvironment.configValueAtom(id))))) {
+    return null;
+  }
+  const release = get(npmReleaseAtom("latest"));
+  return AsyncResult.isSuccess(release) ? (release.value?.version ?? null) : null;
+}).pipe(Atom.withLabel("stable-server-release"));
+
+export function useStableServerRelease(): string | null {
+  return useAtomValue(stableServerReleaseAtom);
+}

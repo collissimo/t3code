@@ -68,10 +68,12 @@ export interface SkippedMachine {
 
 /** Skip current and app-hosted servers; the latter update with the app and would relaunch mid-run.
  * Desktop-managed servers use their own feed. Each server's updater checks that it can install the
- * release before it restarts, so no registry precheck runs here. */
+ * release before it restarts, so no registry precheck runs here. With `stableRelease`, a stable
+ * server moves to it while this app is on another track. */
 export function collectServerUpdateTargets(
   machines: ReadonlyArray<UpdateEverythingMachine>,
-  targetVersion: string,
+  appTargetVersion: string,
+  stableRelease: string | null = null,
 ): {
   readonly targets: ServerUpdateTarget[];
   readonly skipped: SkippedMachine[];
@@ -81,9 +83,15 @@ export function collectServerUpdateTargets(
   for (const machine of machines) {
     const config = machine.serverConfig;
     if (machine.hostedByThisApp) continue;
-    if (config !== null && resolveServerConfigVersionMismatch(config, targetVersion) === null) {
-      continue;
-    }
+    const mismatch =
+      config === null
+        ? null
+        : resolveServerConfigVersionMismatch(config, {
+            clientVersion: appTargetVersion,
+            stableRelease,
+          });
+    if (config !== null && mismatch === null) continue;
+    const targetVersion = mismatch?.targetVersion ?? appTargetVersion;
     const skip = (reason: string) =>
       skipped.push({ environmentId: machine.environmentId, label: machine.label, reason });
     const unavailable = unavailableReason(machine);
@@ -251,7 +259,7 @@ export function collectChannelSwitchTargets(
     if (
       config !== null &&
       sameTrack &&
-      resolveServerConfigVersionMismatch(config, release.version) === null
+      resolveServerConfigVersionMismatch(config, { clientVersion: release.version }) === null
     ) {
       const move = trackSwitchMove(config, true);
       if (

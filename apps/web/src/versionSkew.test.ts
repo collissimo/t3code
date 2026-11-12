@@ -55,6 +55,7 @@ describe("versionSkew", () => {
   it("returns a mismatch when the server is behind the client", () => {
     expect(resolveVersionMismatch("0.0.33")).toEqual({
       clientVersion: "0.0.34",
+      targetVersion: "0.0.34",
       serverVersion: "0.0.33",
       hint: MISMATCH_HINT,
     });
@@ -79,6 +80,7 @@ describe("versionSkew", () => {
 
       expect(resolveVersionMismatch(serverVersion)).toEqual({
         clientVersion: "0.0.34-nightly.20260824.1125",
+        targetVersion: "0.0.34-nightly.20260824.1125",
         serverVersion,
         hint: MISMATCH_HINT,
       });
@@ -95,6 +97,7 @@ describe("versionSkew", () => {
 
     expect(resolveVersionMismatch("0.0.34")).toEqual({
       clientVersion: "0.0.35-nightly.20260818.1124",
+      targetVersion: "0.0.35-nightly.20260818.1124",
       serverVersion: "0.0.34",
       hint: MISMATCH_HINT,
     });
@@ -103,6 +106,7 @@ describe("versionSkew", () => {
   it("falls back to string inequality when a version is not semver", () => {
     expect(resolveVersionMismatch("dev")).toEqual({
       clientVersion: "0.0.34",
+      targetVersion: "0.0.34",
       serverVersion: "dev",
       hint: MISMATCH_HINT,
     });
@@ -112,10 +116,10 @@ describe("versionSkew", () => {
     expect(resolveVersionMismatch("0.0.34")).toMatchObject({ serverVersion: "0.0.34" });
   });
 
-  it("keys dismissals by environment, client version, and server version", () => {
+  it("keys dismissals by environment, target version, and server version", () => {
     const environmentId = EnvironmentId.make("environment-dismissal");
     const key = buildVersionMismatchDismissalKey(environmentId, {
-      clientVersion: APP_VERSION,
+      targetVersion: APP_VERSION,
       serverVersion: "9.9.9",
     });
 
@@ -127,7 +131,7 @@ describe("versionSkew", () => {
     expect(
       isVersionMismatchDismissed(
         buildVersionMismatchDismissalKey(environmentId, {
-          clientVersion: APP_VERSION,
+          targetVersion: APP_VERSION,
           serverVersion: "9.9.10",
         }),
       ),
