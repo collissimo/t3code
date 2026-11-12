@@ -85,6 +85,30 @@ describe("collectServerUpdateTargets", () => {
     ]);
   });
 
+  it("moves stable servers to the newest stable release while this app is on nightly", () => {
+    const appVersion = "0.1.10-nightly.20261112.10203";
+    const machines = [
+      machine("behind", "0.1.7", "boot-service"),
+      machine("manual", "0.1.7", undefined),
+      machine("current", "0.1.9", "boot-service"),
+      machine("nightly-service", "0.1.10-nightly.20261111.10198", "boot-service"),
+    ];
+
+    const { targets, skipped } = collectServerUpdateTargets(machines, appVersion, "0.1.9");
+
+    expect(targets.map((target) => [target.serverLabel, target.targetVersion])).toEqual([
+      ["behind", "0.1.9"],
+      ["nightly-service", appVersion],
+    ]);
+    expect(skipped.map((entry) => [entry.label, entry.reason])).toEqual([
+      ["manual", "needs a manual update"],
+    ]);
+    // Without a known stable release, stable servers still wait for a track switch.
+    expect(
+      collectServerUpdateTargets(machines, appVersion).skipped.map((entry) => entry.label),
+    ).toEqual(["behind", "manual", "current"]);
+  });
+
   it("leaves out desktop apps that update from the other feed (fork vs upstream)", () => {
     const { targets, skipped } = collectServerUpdateTargets(
       [

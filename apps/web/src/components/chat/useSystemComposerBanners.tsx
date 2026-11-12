@@ -33,6 +33,7 @@ import {
   resolveServerSelfUpdateCapability,
   supportsDesktopAppUpdate,
 } from "../../versionSkew";
+import { useStableServerRelease } from "~/state/npmRelease";
 
 export type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
@@ -135,7 +136,9 @@ export function useSystemComposerBanners(input: SystemComposerBannersInput) {
     handleDisconnectActiveEnvironment,
   );
   const autoBalanceUpdateBanner = useAutoBalanceUpdateBanner(autoUpdateEnvironments);
-  const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
+  const versionMismatch = resolveServerConfigVersionMismatch(serverConfig, {
+    stableRelease: useStableServerRelease(),
+  });
   const versionMismatchServerLabel =
     hasMultipleRegisteredEnvironments && activeThreadEnvironmentId !== null
       ? `${activeEnvironment?.label ?? serverConfig?.environment.label ?? activeThreadEnvironmentId} server`
@@ -243,7 +246,7 @@ export function useSystemComposerBanners(input: SystemComposerBannersInput) {
             selfUpdate={versionMismatchSelfUpdate}
             installation={versionMismatchInstallation}
             desktopAppUpdate={versionMismatchDesktopAppUpdate}
-            targetVersion={versionMismatch.clientVersion}
+            targetVersion={versionMismatch.targetVersion}
             label="Retry"
             variant="ghost"
           />

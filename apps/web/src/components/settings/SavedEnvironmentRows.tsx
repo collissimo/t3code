@@ -47,6 +47,7 @@ import {
   resolveServerSelfUpdateCapability,
   supportsDesktopAppUpdate,
 } from "~/versionSkew";
+import { useStableServerRelease } from "~/state/npmRelease";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { isElectron } from "~/env";
 import { useT3ConnectTurnOn } from "~/cloud/useT3ConnectTurnOn";
@@ -166,7 +167,9 @@ export function SavedBackendListRow({
       );
     },
   });
-  const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
+  const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig, {
+    stableRelease: useStableServerRelease(),
+  });
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
   const resumingServerUpdate =
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
@@ -233,7 +236,7 @@ export function SavedBackendListRow({
         : "Switched off"
   }${
     versionMismatch
-      ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
+      ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.targetVersion}`
       : ""
   }`;
 
@@ -374,7 +377,7 @@ export function SavedBackendListRow({
           selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
           installation={environment.serverConfig?.environment.capabilities.serverInstallation}
           desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
-          targetVersion={versionMismatch.clientVersion}
+          targetVersion={versionMismatch.targetVersion}
           label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
           appearance="icon"
         />

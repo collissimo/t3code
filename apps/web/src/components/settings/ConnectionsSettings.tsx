@@ -83,6 +83,7 @@ import {
   resolveServerSelfUpdateCapability,
   supportsDesktopAppUpdate,
 } from "~/versionSkew";
+import { useStableServerRelease } from "~/state/npmRelease";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
 import { authEnvironment } from "~/state/auth";
@@ -276,9 +277,12 @@ function ConnectionsSettingsContent({
     environment,
     updateStatus: savedUpdateStates[index]!.status,
   }));
+  const stableRelease = useStableServerRelease();
   const savedServerUpdateTargets = savedServerUpdateStates.flatMap(
     ({ environment, updateStatus }): ServerUpdateTarget[] => {
-      const mismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
+      const mismatch = resolveServerConfigVersionMismatch(environment.serverConfig, {
+        stableRelease,
+      });
       const selfUpdate = resolveServerSelfUpdateCapability(environment.serverConfig);
       const desktopAppUpdate = supportsDesktopAppUpdate(environment.serverConfig);
       if (
@@ -299,7 +303,7 @@ function ConnectionsSettingsContent({
           selfUpdate,
           installation: environment.serverConfig?.environment.capabilities.serverInstallation,
           desktopAppUpdate,
-          targetVersion: mismatch.clientVersion,
+          targetVersion: mismatch.targetVersion,
         },
       ];
     },
@@ -368,7 +372,9 @@ function ConnectionsSettingsContent({
     primaryServerConfig?.managedPolicy,
     "remoteClients",
   );
-  const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig);
+  const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig, {
+    stableRelease,
+  });
   const primaryServerUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(primaryEnvironmentId),
   );
@@ -1209,11 +1215,11 @@ function ConnectionsSettingsContent({
                         primaryServerConfig?.environment.capabilities.serverInstallation
                       }
                       desktopAppUpdate={supportsDesktopAppUpdate(primaryServerConfig)}
-                      targetVersion={primaryVersionMismatch.clientVersion}
+                      targetVersion={primaryVersionMismatch.targetVersion}
                       label={
                         primaryServerUpdateState.status === "failed"
                           ? "Retry update"
-                          : `Update to ${primaryVersionMismatch.clientVersion}`
+                          : `Update to ${primaryVersionMismatch.targetVersion}`
                       }
                     />
                   ) : primaryServerUpdateState.status === "idle" && primaryServerConfig ? (

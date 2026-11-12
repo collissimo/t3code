@@ -5,6 +5,7 @@ import { APP_VERSION } from "~/branding";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
 import { useEnvironments } from "~/state/environments";
+import { useStableServerRelease } from "~/state/npmRelease";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentUpdateStatesAtom } from "~/state/server";
 import { environmentSessionStatesAtom } from "~/state/session";
@@ -53,6 +54,7 @@ export function useUpdateEverything(
   channelSwitch?: ChannelSwitchRelease,
 ) {
   const targetVersion = localUpdateVersion ?? APP_VERSION;
+  const stableRelease = useStableServerRelease();
   const { environments } = useEnvironments();
   const environmentIds = environmentIdsKey(environments.map(({ environmentId }) => environmentId));
   const sessionStates = useAtomValue(environmentSessionStatesAtom(environmentIds));
@@ -68,7 +70,7 @@ export function useUpdateEverything(
   }));
   const { targets: servers, skipped } = channelSwitch
     ? collectChannelSwitchTargets(machines, channelSwitch)
-    : collectServerUpdateTargets(machines, targetVersion);
+    : collectServerUpdateTargets(machines, targetVersion, stableRelease);
   // Track-only hosts save a setting and restart nothing, so they are neither listed nor counted.
   const moving = servers.filter((server) => server.trackOnly !== true);
   const restarts = collectRestartingMachines(machines, moving, localUpdateVersion !== null);
