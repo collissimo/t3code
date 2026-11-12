@@ -167,6 +167,10 @@
       "types": "./src/projectSettings.ts",
       "import": "./src/projectSettings.ts"
     },
+    "./orchestratorMode": {
+      "types": "./src/orchestratorMode.ts",
+      "import": "./src/orchestratorMode.ts"
+    },
     "./t3ProjectFile": {
       "types": "./src/t3ProjectFile.ts",
       "import": "./src/t3ProjectFile.ts"

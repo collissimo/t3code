@@ -52,6 +52,7 @@ import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { orchestratorModeInstructions } from "@t3tools/provider-core/server/orchestratorModeInstructions";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderCommitBatch from "./ProviderCommitBatch.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
@@ -845,7 +846,7 @@ it.effect("rechecks run ownership immediately before calling the provider", () =
   }).pipe(Effect.provide(layerRunExecutionTest)),
 );
 
-it.effect("passes the thread's MCP app context to the provider under a safe key", () =>
+it.effect("passes the thread's MCP app context and orchestrator role to the provider", () =>
   Effect.gen(function* () {
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const started = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2TurnInput>();
@@ -897,6 +898,10 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
     assert.deepEqual(input.appContext, [
       { key: "mcp_app_turn-item_provider_codex_native-item_call-1", text: "2 overdue" },
     ]);
+    assert.deepEqual(
+      input.threadInstructions,
+      orchestratorModeInstructions({ workerModel: "claude-opus-5-5" }),
+    );
   }).pipe(
     Effect.provide(
       RunExecutionService.layer.pipe(
@@ -923,7 +928,13 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
-            ServerSettings.layerTest(),
+            ServerSettings.layerTest({
+              orchestratorThreads: [ThreadId.make("thread:run-execution-app-context")],
+              defaultModelSelection: {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                model: "claude-opus-5-5",
+              },
+            }),
           ),
         ),
       ),

@@ -1,6 +1,11 @@
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
+  isOrchestratorThread,
+  orchestratorWorkerModelSelection,
+} from "@t3tools/shared/orchestratorMode";
+import { orchestratorModeInstructions } from "@t3tools/provider-core/server/orchestratorModeInstructions";
+import {
   isOrchestrationV2WorkActive,
   CommandId,
   type EventId,
@@ -1779,6 +1784,20 @@ export const layer: Layer.Layer<
           key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
           text: entry.text,
         }));
+        const threadInstructions = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) =>
+            isOrchestratorThread(settings, input.appThread.id)
+              ? orchestratorModeInstructions({
+                  workerModel: orchestratorWorkerModelSelection(settings, input.appThread)?.model,
+                })
+              : undefined,
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("Failed to read orchestrator mode settings.", { cause }).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        );
         const turnInput = {
           appThread: input.appThread,
           threadId: input.run.threadId,
@@ -1800,6 +1819,7 @@ export const layer: Layer.Layer<
           modelSelection: input.modelSelection,
           runtimePolicy: input.runtimePolicy,
           ...(appContext.length === 0 ? {} : { appContext }),
+          ...(threadInstructions === undefined ? {} : { threadInstructions }),
         };
         // Check after the context read: ingestion can settle the run while
         // it awaits. A failed ownership read fails the start below.

@@ -68,6 +68,7 @@ import {
   SECRET_REQUEST_UNSAVED_NOTE,
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@t3tools/shared/model";
+import { orchestratorWorkerModelSelection } from "@t3tools/shared/orchestratorMode";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import {
@@ -1325,6 +1326,19 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(threadManagementFailure));
 
+  /** An orchestrator's children default to the worker model, so its own model is not the one to inherit. */
+  const withWorkerModel = Effect.fn("OrchestratorMcpService.withWorkerModel")(function* <
+    Parent extends Pick<OrchestrationV2ThreadProjection, "thread">,
+  >(parent: Parent) {
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
+    );
+    const modelSelection = orchestratorWorkerModelSelection(settings, parent.thread);
+    return modelSelection === undefined
+      ? parent
+      : { ...parent, thread: { ...parent.thread, modelSelection } };
+  });
+
   const resolveTargetRechecking = (input: Parameters<typeof resolveTarget>[0]) => {
     const instanceId =
       input.target?.providerInstanceId ??
@@ -2343,7 +2357,8 @@ const make = Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
       );
-      const inherited = parent?.thread.modelSelection;
+      const inherited =
+        orchestratorWorkerModelSelection(settings, parent?.thread) ?? parent?.thread.modelSelection;
       const searchTerms = input.search?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
       return {
         parentThreadId: parent?.thread.id ?? null,
@@ -2428,10 +2443,26 @@ const make = Effect.gen(function* () {
       if (input.target !== undefined && environmentId !== undefined) {
         yield* requireCapability(callerScope);
         const scope = yield* requireThreadScope(callerScope, "delegate_task");
+        // That side inherits this thread's model, so an orchestrator names its worker model.
+        const worker =
+          input.target.providerInstanceId === undefined && input.target.model === undefined
+            ? (yield* withWorkerModel(yield* loadProjection(scope.thread.threadId, false))).thread
+                .modelSelection
+            : undefined;
         // The task's child runs as an ordinary thread there; this thread keeps the task.
         const { taskId } = yield* remoteDelegation.delegate(scope, {
           ...input,
-          target: { ...input.target, environmentId },
+          target: {
+            ...(worker === undefined
+              ? {}
+              : {
+                  providerInstanceId: worker.instanceId,
+                  model: worker.model,
+                  ...(worker.options === undefined ? {} : { options: worker.options }),
+                }),
+            ...input.target,
+            environmentId,
+          },
         });
         return yield* input.mode === "wait"
           ? awaitTask(scope, taskId, input.timeoutMs)
@@ -2469,7 +2500,7 @@ const make = Effect.gen(function* () {
       });
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
       const target = yield* resolveTargetRechecking({
-        parent,
+        parent: yield* withWorkerModel(parent),
         target: input.target,
         providers,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
