@@ -44,12 +44,15 @@ export interface CodexRuntimeInfo {
 export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | T3CodeToolAvailability = true,
+  /** The thread's role sections, such as orchestrator mode; each within the per-entry cap. */
+  threadInstructions: ReadonlyArray<string> = [],
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
   // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...Object.fromEntries(
-      T3_CODE_ORCHESTRATION_SECTIONS.map((section, index) => [
+      // Thread sections sort after the orchestration sections they refine.
+      [...T3_CODE_ORCHESTRATION_SECTIONS, ...threadInstructions].map((section, index) => [
         `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),

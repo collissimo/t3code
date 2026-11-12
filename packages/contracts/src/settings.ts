@@ -1435,6 +1435,8 @@ export const ServerSettings = Schema.Struct({
   archiveScheduledTaskRuns: Schema.Array(ScheduledTaskId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** Threads whose agent orchestrates: it plans and delegates to workers on the default model. */
+  orchestratorThreads: Schema.Array(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   snoozePresets: SnoozePresetSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
   ),
@@ -1873,6 +1875,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   archiveScheduledTaskRuns: Schema.optionalKey(Schema.Array(ScheduledTaskId)),
+  orchestratorThreads: Schema.optionalKey(Schema.Array(ThreadId)),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),

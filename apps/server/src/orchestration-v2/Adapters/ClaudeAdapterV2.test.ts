@@ -694,6 +694,7 @@ describe("ClaudeAdapterV2 device instructions", () => {
     readonly mcp: boolean;
     readonly deviceToolsAvailable: boolean;
     readonly scriptToolAvailable?: boolean;
+    readonly threadInstructions?: ReadonlyArray<string>;
   }
   const options = (input: OptionsInput) =>
     ClaudeAdapterV2.makeClaudeQueryOptions({
@@ -709,10 +710,19 @@ describe("ClaudeAdapterV2 device instructions", () => {
         : {}),
       deviceToolsAvailable: input.deviceToolsAvailable,
       scriptToolAvailable: input.scriptToolAvailable ?? false,
+      ...(input.threadInstructions ? { threadInstructions: input.threadInstructions } : {}),
       environment: {},
     });
   const append = (input: OptionsInput) =>
     (options(input).systemPrompt as { readonly append?: string }).append ?? "";
+
+  it("ends the system prompt with the thread's role instructions", () => {
+    const base = { mcp: true, deviceToolsAvailable: false };
+    assert.equal(
+      append({ ...base, threadInstructions: ["## Role", "### Detail"] }),
+      `${append(base)}\n\n## Role\n\n### Detail`,
+    );
+  });
 
   it("gives a session with device access the device block and the ToolSearch line to load it", () => {
     const text = append({ mcp: true, deviceToolsAvailable: true });

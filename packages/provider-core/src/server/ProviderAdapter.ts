@@ -500,6 +500,8 @@ export interface ProviderAdapterV2TurnInput {
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
+  /** Trusted instruction sections for this thread's role, such as orchestrator mode. */
+  readonly threadInstructions?: ReadonlyArray<string>;
 }
 
 export interface ProviderAdapterV2SteerInput {

@@ -3126,6 +3126,11 @@ describe("OrchestratorMcpService provider resolution", () => {
           ],
         } as const;
         const override = [{ id: "reasoningEffort", value: "max" }] as const;
+        const workerDefault = {
+          instanceId: codexInstanceId,
+          model: "other-model",
+          options: [{ id: "reasoningEffort", value: "low" }],
+        } as const;
         const cases = [
           {
             name: "partial override",
@@ -3164,8 +3169,22 @@ describe("OrchestratorMcpService provider resolution", () => {
               ],
             },
           },
+          {
+            name: "orchestrator starts workers on the default model",
+            orchestrator: true,
+            target: {},
+            expected: workerDefault,
+          },
+          {
+            name: "orchestrator override keeps the worker model",
+            orchestrator: true,
+            target: { options: override },
+            expected: { ...workerDefault, options: override },
+          },
         ] as const;
         for (const testCase of cases) {
+          const orchestrator = "orchestrator" in testCase;
+          const inheritedHere = orchestrator ? workerDefault : inherited;
           const commands: Array<unknown> = [];
           const task = {
             id: taskId,
@@ -3198,7 +3217,11 @@ describe("OrchestratorMcpService provider resolution", () => {
                   } as never;
                 }),
             }),
-            ServerSettings.layerTest(),
+            ServerSettings.layerTest(
+              orchestrator
+                ? { orchestratorThreads: [parentThreadId], defaultModelSelection: workerDefault }
+                : {},
+            ),
             providerRegistryLayer([
               {
                 ...providerSnapshot({
@@ -3245,7 +3268,8 @@ describe("OrchestratorMcpService provider resolution", () => {
           yield* Effect.gen(function* () {
             const service = yield* OrchestratorMcpService.OrchestratorMcpService;
             const capabilities = yield* service.capabilities(scope);
-            assert.deepEqual(capabilities.inheritedOptions, inherited.options);
+            assert.equal(capabilities.inheritedModel, inheritedHere.model, testCase.name);
+            assert.deepEqual(capabilities.inheritedOptions, inheritedHere.options, testCase.name);
             yield* service.delegateTask(scope, {
               task: "Review the change.",
               target: yield* decodeTarget(testCase.target),

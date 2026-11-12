@@ -1,6 +1,7 @@
 import * as NodeAssert from "node:assert/strict";
 
 import { T3_CODE_DEVICE_TOOL_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
+import { orchestratorModeInstructions } from "@t3tools/provider-core/server/orchestratorModeInstructions";
 import { describe, it } from "vite-plus/test";
 
 import {
@@ -15,7 +16,15 @@ describe("buildCodexAdditionalContext", () => {
     it.each([undefined, { browser: true, device: true }])(
       "keeps every entry within Codex's per-entry cap with tools %j",
       (availability) => {
-        const context = buildCodexAdditionalContext(runtime, availability);
+        const context = buildCodexAdditionalContext(
+          runtime,
+          availability,
+          orchestratorModeInstructions({ workerModel: "claude-opus-5-5" }),
+        );
+        NodeAssert.equal(
+          context.t3_code_orchestration_05?.value.split("\n")[0],
+          "### Working with workers",
+        );
 
         for (const [key, entry] of Object.entries(context)) {
           // Codex counts ceil(UTF-8 bytes / 4) tokens, excluding keys and wrappers.
