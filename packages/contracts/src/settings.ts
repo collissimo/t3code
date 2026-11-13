@@ -1340,6 +1340,11 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+export const OrchestratorThreadWorkerEffort = Schema.Struct({
+  threadId: ThreadId,
+  effort: TrimmedNonEmptyString,
+});
+
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1437,6 +1442,18 @@ export const ServerSettings = Schema.Struct({
   ),
   /** Threads whose agent orchestrates: it plans and delegates to workers on the default model. */
   orchestratorThreads: Schema.Array(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Reasoning effort a new orchestrator starts on; null keeps its model's default. */
+  orchestratorEffort: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  /** Reasoning effort an orchestrator's workers start on; null keeps the worker model's own. */
+  orchestratorWorkerEffort: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  /** Orchestrators whose workers start on another effort than `orchestratorWorkerEffort`. */
+  orchestratorThreadWorkerEfforts: Schema.Array(OrchestratorThreadWorkerEffort).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   snoozePresets: SnoozePresetSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
   ),
@@ -1876,6 +1893,9 @@ export const ServerSettingsPatch = Schema.Struct({
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   archiveScheduledTaskRuns: Schema.optionalKey(Schema.Array(ScheduledTaskId)),
   orchestratorThreads: Schema.optionalKey(Schema.Array(ThreadId)),
+  orchestratorEffort: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  orchestratorWorkerEffort: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  orchestratorThreadWorkerEfforts: Schema.optionalKey(Schema.Array(OrchestratorThreadWorkerEffort)),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),

@@ -1326,14 +1326,18 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(threadManagementFailure));
 
-  /** An orchestrator's children default to the worker model, so its own model is not the one to inherit. */
+  /** An orchestrator's children default to the worker model and effort, not to its own. */
   const withWorkerModel = Effect.fn("OrchestratorMcpService.withWorkerModel")(function* <
     Parent extends Pick<OrchestrationV2ThreadProjection, "thread">,
   >(parent: Parent) {
     const settings = yield* serverSettings.getSettings.pipe(
       Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
     );
-    const modelSelection = orchestratorWorkerModelSelection(settings, parent.thread);
+    const modelSelection = orchestratorWorkerModelSelection(
+      settings,
+      parent.thread,
+      yield* loadProviders,
+    );
     return modelSelection === undefined
       ? parent
       : { ...parent, thread: { ...parent.thread, modelSelection } };
@@ -2358,7 +2362,8 @@ const make = Effect.gen(function* () {
         Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
       );
       const inherited =
-        orchestratorWorkerModelSelection(settings, parent?.thread) ?? parent?.thread.modelSelection;
+        orchestratorWorkerModelSelection(settings, parent?.thread, providers) ??
+        parent?.thread.modelSelection;
       const searchTerms = input.search?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
       return {
         parentThreadId: parent?.thread.id ?? null,

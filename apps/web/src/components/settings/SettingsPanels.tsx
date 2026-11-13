@@ -59,6 +59,7 @@ import {
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeContext";
 import { scopedIdleCompaction } from "./scopedSettings";
+import { OrchestratorSettings } from "./OrchestratorSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
@@ -1648,6 +1649,8 @@ export function ThreadsSettingsPanel() {
           <SnoozePresetsRow />
         </SettingsSection>
       ) : null}
+
+      {!isProjectScope ? <OrchestratorSettings providers={serverProviders} /> : null}
 
       <SettingsSection id="usage-limits" title="Usage limits">
         <SettingsRow

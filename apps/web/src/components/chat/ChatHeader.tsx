@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type ModelSelection,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -48,6 +49,7 @@ interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
   activeThreadTitle: string;
+  activeThreadModelSelection?: ModelSelection | undefined;
   activeThreadLinkOrigin?: string | null | undefined;
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
@@ -73,6 +75,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
   activeThreadTitle,
+  activeThreadModelSelection,
   activeThreadLinkOrigin,
   isServerThread,
   activeProject,
@@ -320,7 +323,12 @@ export const ChatHeader = memo(function ChatHeader({
           </>
         ) : null}
         <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
-          <OrchestratorBadge environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
+          <OrchestratorBadge
+            environmentId={activeThreadEnvironmentId}
+            threadId={activeThreadId}
+            projectId={activeProject?.id ?? null}
+            modelSelection={activeThreadModelSelection}
+          />
           {renamingTitle !== null ? (
             <input
               autoFocus

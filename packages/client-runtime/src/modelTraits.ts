@@ -5,7 +5,7 @@ import {
   getProviderOptionCurrentValue,
   isClaudeUltrathinkPrompt,
 } from "@t3tools/shared/model";
-import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
+import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/shared/model";
 
 const REASONING_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
   ...REASONING_EFFORT_OPTION_IDS,
