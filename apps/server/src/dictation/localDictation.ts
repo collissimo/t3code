@@ -7,6 +7,7 @@ import type * as TranscribeCpp from "transcribe-cpp";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
 import { CloudDictation } from "./cloudDictation.ts";
@@ -18,6 +19,9 @@ import {
 } from "./DictationEngine.ts";
 import { findModel, findVadModel, modelDirectories } from "./modelFiles.ts";
 import { DEFAULT_STRUCTURE_CODEWORDS, removeFillers, splitCodeword } from "./transcriptText.ts";
+
+// A single-executable cannot resolve package imports; require reads both native packages from disk.
+const requireNative = NodeModule.createRequire(import.meta.url);
 
 const IDLE_UNLOAD_MS = 15 * 60_000;
 export const HOUSEKEEPING_INTERVAL_MS = 30_000;
@@ -46,7 +50,7 @@ const disableVulkanCoopmat = async (): Promise<void> => {
   const name = "GGML_VK_DISABLE_COOPMAT";
   if (process.env[name] !== undefined) return;
   if (PLATFORM === "win32") {
-    const koffi = (await import("koffi")).default;
+    const koffi = requireNative("koffi") as typeof import("koffi");
     koffi.load("ucrtbase.dll").func("int _putenv_s(str, str)")(name, "1");
   }
   process.env[name] = "1";
@@ -55,7 +59,12 @@ const disableVulkanCoopmat = async (): Promise<void> => {
 // transcribe-cpp dlopens a native library; it is only loaded once someone dictates.
 const loadTranscribeCpp = async (): Promise<TranscribeModule> => {
   await disableVulkanCoopmat();
-  const module = (await import("transcribe-cpp")) as TranscribeModule;
+  // transcribe-cpp only exports an import entry, so require takes its file on disk.
+  const packagePath = NodeModule.findPackageJSON("transcribe-cpp", import.meta.url);
+  if (!packagePath) throw new Error("The transcribe-cpp package is not installed.");
+  const module = requireNative(
+    NodePath.join(NodePath.dirname(packagePath), "dist/index.js"),
+  ) as TranscribeModule;
   if (!process.env.TRANSCRIBE_LIBRARY) {
     // In the desktop app the package sits in an asar archive, which the OS loader cannot read;
     // its DLLs are unpacked beside the archive.
