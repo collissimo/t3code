@@ -1,5 +1,5 @@
 # Fork releases: Windows x64 and Linux x64 builds of each upstream nightly with this fork's features
-# merged in.
+# merged in, plus the Linux x64 CLI archive for a server that runs without the desktop app.
 #
 # The desktop app looks for updates in the repository it was built in (GITHUB_REPOSITORY ends up
 # in app-update.yml), so a build from here keeps updating from here and the update button never
@@ -335,7 +335,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libsecret-1-dev pkg-config imagemagick
+          sudo apt-get install -y build-essential libsecret-1-dev pkg-config imagemagick patchelf
 
       # Upstream installs Spectre-mitigated MSVC libs first; only the build script's preflight
       # asks for them, and a reused monitor skips that check. The VS installer took minutes there.
@@ -363,12 +363,31 @@ jobs:
             --build-version "$VERSION" \
             --verbose
 
+      # A fork server installed from the CLI archive (T3CODE_RELEASE_BASE_URL pointing here) updates
+      # from this file. As in release-desktop.yml, after the desktop build: that leaves the branded
+      # web client in apps/server/dist and the resource monitor in cargo's target directory.
+      - name: Build CLI archive
+        if: matrix.platform == 'linux'
+        timeout-minutes: 20
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: |
+          set -euo pipefail
+          node apps/server/scripts/cli.ts build-exe --verbose
+          monitor="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          mkdir -p "$monitor"
+          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$monitor/"
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$VERSION" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" --output-dir release-cli
+          node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$VERSION"
+
       - name: Collect release assets
         run: |
           set -euo pipefail
           ls -la release
           mkdir publish
           cp ${{ matrix.assets }} publish/
+          if [[ -d release-cli ]]; then cp release-cli/* publish/; fi
           feed=$(ls publish/*.yml)
           grep -q "version: $VERSION" "$feed"
           cat "$feed"
@@ -405,6 +424,8 @@ jobs:
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
         run: |
           set -euo pipefail
+          # Server updates verify the CLI archive against this file.
+          (cd publish && sha256sum t3-*.tar.gz > SHA256SUMS && cat SHA256SUMS)
           ls -la publish
           # Missing notes must not hold back a build; the marker alone still records it.
           marker="<!-- fork-release fork=$FORK_SHA upstream=$UPSTREAM_SHA upstream-tag=$UPSTREAM_TAG -->"
