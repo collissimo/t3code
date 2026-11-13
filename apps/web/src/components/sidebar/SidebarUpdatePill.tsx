@@ -432,7 +432,8 @@ function SidebarUpdateControl() {
           ? { status: "downloading", percent: state.downloadPercent }
           : { status: "waiting" };
     return (
-      <SidebarMenuItem className="ml-auto flex flex-1">
+      // Too narrow for its label beside the footer icons, the capsule wraps onto its own row.
+      <SidebarMenuItem className="ml-auto flex min-w-40 flex-1">
         <SidebarUpdateCapsule
           run={run}
           local={local}

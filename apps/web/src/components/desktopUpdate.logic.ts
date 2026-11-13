@@ -1,24 +1,10 @@
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
+import { githubReleaseRepository } from "@t3tools/shared/cliRelease";
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
-const DEFAULT_DESKTOP_RELEASE_REPOSITORY = "pingdotgg/t3code";
-const GITHUB_REPOSITORY_SEGMENT = /^[A-Za-z0-9._-]+$/u;
-
-function isValidRepositorySegment(value: string | undefined): value is string {
-  return (
-    value !== undefined && value !== "." && value !== ".." && GITHUB_REPOSITORY_SEGMENT.test(value)
-  );
-}
-
 function desktopReleaseRepositoryUrl(repository: string | undefined): string {
-  const configuredRepository = repository?.trim() ?? "";
-  const [owner, name, ...extra] = configuredRepository.split("/");
-  const releaseRepository =
-    isValidRepositorySegment(owner) && isValidRepositorySegment(name) && extra.length === 0
-      ? configuredRepository
-      : DEFAULT_DESKTOP_RELEASE_REPOSITORY;
-  return `https://github.com/${releaseRepository}/releases`;
+  return `https://github.com/${githubReleaseRepository(repository)}/releases`;
 }
 
 /** The download RPC can beat the updater's downloadedVersion event; fall back to the requested version. */

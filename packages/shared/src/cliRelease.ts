@@ -3,7 +3,29 @@ import * as Schema from "effect/Schema";
 
 import { compareSemverVersions } from "./semver.ts";
 
-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
+const UPSTREAM_RELEASE_REPOSITORY = "pingdotgg/t3code";
+const GITHUB_REPOSITORY_SEGMENT = /^[A-Za-z0-9._-]+$/u;
+
+/** `configured` when it is a GitHub `owner/name`, otherwise the upstream repository. */
+export function githubReleaseRepository(configured: string | undefined): string {
+  const repository = configured?.trim() ?? "";
+  const segments = repository.split("/");
+  return segments.length === 2 &&
+    segments.every(
+      (segment) => segment !== "." && segment !== ".." && GITHUB_REPOSITORY_SEGMENT.test(segment),
+    )
+    ? repository
+    : UPSTREAM_RELEASE_REPOSITORY;
+}
+
+// Server, desktop and web builds bake in the repository they were built in, as the desktop updater
+// does, so a fork build updates from its fork's releases. Unset in tests and mobile.
+declare const __T3CODE_BUILD_RELEASE_REPOSITORY__: string | undefined;
+const CLI_RELEASE_REPOSITORY = githubReleaseRepository(
+  typeof __T3CODE_BUILD_RELEASE_REPOSITORY__ === "undefined"
+    ? undefined
+    : __T3CODE_BUILD_RELEASE_REPOSITORY__,
+);
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";

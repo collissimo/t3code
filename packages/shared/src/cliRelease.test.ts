@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { cliArchiveTarCommand, newestCliReleaseVersion, parseChecksums } from "./cliRelease.ts";
+import {
+  cliArchiveTarCommand,
+  githubReleaseRepository,
+  newestCliReleaseVersion,
+  parseChecksums,
+} from "./cliRelease.ts";
 
 describe("cliRelease", () => {
   it("parses sha256sum output including binary-mode markers", () => {
@@ -15,6 +20,13 @@ describe("cliRelease", () => {
     expect(checksums.get("t3-1.2.3-linux-x64.tar.gz")).toBe("a".repeat(64));
     expect(checksums.get("t3-1.2.3-win32-x64.zip")).toBe("b".repeat(64));
     expect(checksums.size).toBe(2);
+  });
+
+  it("updates from the repository a build was made in, and from upstream without one", () => {
+    expect(githubReleaseRepository(" fork-owner/t3code ")).toBe("fork-owner/t3code");
+    expect(githubReleaseRepository("")).toBe("pingdotgg/t3code");
+    expect(githubReleaseRepository(undefined)).toBe("pingdotgg/t3code");
+    expect(githubReleaseRepository("fork-owner/../t3code")).toBe("pingdotgg/t3code");
   });
 
   it("extracts with the System32 bsdtar on Windows and plain tar elsewhere", () => {

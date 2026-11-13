@@ -101,6 +101,11 @@ export function loadRepoEnv({
   };
 }
 
+/** The GitHub `owner/name` whose releases this build updates from: CI's own repository unless overridden. */
+export function buildReleaseRepository(env: Environment = process.env): string {
+  return env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() || env.GITHUB_REPOSITORY?.trim() || "";
+}
+
 function resolvePublicConfig(...sources: readonly Environment[]): T3CodePublicConfig {
   return {
     clerkPublishableKey: firstNonEmpty(
