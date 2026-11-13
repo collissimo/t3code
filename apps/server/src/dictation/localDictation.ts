@@ -7,6 +7,7 @@ import type * as TranscribeCpp from "transcribe-cpp";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
 import { CloudDictation } from "./cloudDictation.ts";
@@ -46,16 +47,21 @@ const disableVulkanCoopmat = async (): Promise<void> => {
   const name = "GGML_VK_DISABLE_COOPMAT";
   if (process.env[name] !== undefined) return;
   if (PLATFORM === "win32") {
-    const koffi = (await import("koffi")).default;
+    const koffi = NodeModule.createRequire(import.meta.url)("koffi") as typeof import("koffi");
     koffi.load("ucrtbase.dll").func("int _putenv_s(str, str)")(name, "1");
   }
   process.env[name] = "1";
 };
 
-// transcribe-cpp dlopens a native library; it is only loaded once someone dictates.
+// transcribe-cpp dlopens a native library; it is only loaded once someone dictates. Its export is
+// import-only and a single-executable server resolves packages on disk only through `require`.
 const loadTranscribeCpp = async (): Promise<TranscribeModule> => {
   await disableVulkanCoopmat();
-  const module = (await import("transcribe-cpp")) as TranscribeModule;
+  const packagePath = NodeModule.findPackageJSON("transcribe-cpp", import.meta.url);
+  if (!packagePath) throw new Error("The native speech package is unavailable.");
+  const module = NodeModule.createRequire(packagePath)(
+    NodePath.join(NodePath.dirname(packagePath), "dist/index.js"),
+  ) as TranscribeModule;
   if (!process.env.TRANSCRIBE_LIBRARY) {
     // In the desktop app the package sits in an asar archive, which the OS loader cannot read;
     // its DLLs are unpacked beside the archive.
