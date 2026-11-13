@@ -95,6 +95,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useOrchestratorModeToggle } from "./orchestrator/useOrchestratorModeToggle";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import {
@@ -470,6 +471,7 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const orchestratorMode = useOrchestratorModeToggle();
   const paletteRouteTarget = useThreadRouteTarget();
   const projects = useProjects();
   const referenceThreadRef =
@@ -1637,11 +1639,9 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:orchestrator",
     searchTerms: ["orchestrator", "orchestrate", "coordinator", "workers", "delegate", "agents"],
-    title: "Open orchestrator",
+    title: orchestratorMode.on ? "Turn off orchestrator mode" : "Turn on orchestrator mode",
     icon: <NetworkIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({ to: "/orchestrator" });
-    },
+    run: orchestratorMode.toggle,
   });
 
   actionItems.push({

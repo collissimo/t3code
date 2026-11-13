@@ -6,35 +6,10 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { orchestratorWorkerModelSelection, projectOrchestratorThread } from "./orchestratorMode.ts";
+import { orchestratorWorkerModelSelection } from "./orchestratorMode.ts";
 import { applyServerSettingsPatch } from "./serverSettings.ts";
 
 const projectId = ProjectId.make("project-a");
-const thread = (id: string, overrides: { projectId?: ProjectId; archivedAt?: string } = {}) => ({
-  id: ThreadId.make(id),
-  projectId: overrides.projectId ?? projectId,
-  archivedAt: overrides.archivedAt ?? null,
-  deletedAt: null,
-});
-
-describe("projectOrchestratorThread", () => {
-  it("picks the project's listed thread that entered orchestrator mode last", () => {
-    const threads = [
-      thread("first"),
-      thread("second"),
-      thread("archived", { archivedAt: "2026-01-01T00:00:00Z" }),
-      thread("elsewhere", { projectId: ProjectId.make("project-b") }),
-      thread("ordinary"),
-    ];
-    const orchestratorThreads = ["first", "second", "archived", "elsewhere", "never-sent"].map(
-      (id) => ThreadId.make(id),
-    );
-    expect(projectOrchestratorThread({ orchestratorThreads }, projectId, threads)?.id).toBe(
-      "second",
-    );
-    expect(projectOrchestratorThread({ orchestratorThreads: [] }, projectId, threads)).toBeNull();
-  });
-});
 
 describe("orchestratorWorkerModelSelection", () => {
   const defaultModelSelection = {

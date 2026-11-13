@@ -48,6 +48,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { defaultProjectFallbackReadyAtom } from "../state/projects";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
+import { orchestratorDraftMove } from "../lib/orchestratorMode";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 
@@ -90,7 +91,7 @@ export function createNewThreadHandler(router: AnyRouter) {
     return resolveThreadRouteTarget(currentRouteParams);
   };
 
-  return (
+  const open = (
     projectRef: ScopedProjectRef,
     options?: {
       branch?: string | null;
@@ -435,6 +436,15 @@ export function createNewThreadHandler(router: AnyRouter) {
       });
       return { draftId, threadId };
     })();
+  };
+
+  return async (...args: Parameters<typeof open>) => {
+    const source = getCurrentRouteTarget();
+    const moveOrchestratorMode =
+      source?.kind === "draft" ? orchestratorDraftMove(source.draftId) : null;
+    const opened = await open(...args);
+    if (opened !== null) await moveOrchestratorMode?.(args[0].environmentId, opened);
+    return opened;
   };
 }
 
