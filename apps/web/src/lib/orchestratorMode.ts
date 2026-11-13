@@ -6,6 +6,7 @@ import {
 import {
   requiredScopesForServerSettingsPatch,
   type EnvironmentId,
+  type ServerSettings,
   type ServerSettingsPatch,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -13,6 +14,7 @@ import {
   isOrchestratorThread,
   orchestratorModelSelection,
   orchestratorThreadsPatch,
+  orchestratorThreadWorkerEffortPatch,
 } from "@t3tools/shared/orchestratorMode";
 
 import { toastManager } from "../components/ui/toast";
@@ -33,14 +35,14 @@ interface OrchestratorModeChange {
 const readServerConfig = (environmentId: EnvironmentId) =>
   appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
 
-const warnNotSaved = (description: string) =>
-  toastManager.add({ type: "warning", title: "Orchestrator mode not changed", description });
-
-/** Turns orchestrator mode on or off for threads of one environment. False when nothing was saved. */
-async function setOrchestratorMode(
+/** Saves orchestrator settings of one environment, with a toast titled `failure` when it cannot. */
+async function saveOrchestratorSettings(
   environmentId: EnvironmentId,
-  changes: ReadonlyArray<OrchestratorModeChange>,
+  failure: string,
+  makePatch: (settings: ServerSettings) => ServerSettingsPatch | null,
 ): Promise<boolean> {
+  const warnNotSaved = (description: string) =>
+    toastManager.add({ type: "warning", title: failure, description });
   const config = readServerConfig(environmentId);
   if (config === undefined) {
     warnNotSaved("This environment is not connected");
@@ -53,14 +55,7 @@ async function setOrchestratorMode(
     );
     return false;
   }
-  let patch: ServerSettingsPatch | null = null;
-  let threads = config.settings.orchestratorThreads;
-  for (const change of changes) {
-    const next = orchestratorThreadsPatch(threads, change.threadId, change.on);
-    if (next?.orchestratorThreads === undefined) continue;
-    patch = next;
-    threads = next.orchestratorThreads;
-  }
+  const patch = makePatch(config.settings);
   if (patch === null) return true;
   if (
     !requiredScopesForServerSettingsPatch(patch).every((scope) =>
@@ -86,9 +81,38 @@ async function setOrchestratorMode(
   return false;
 }
 
+/** Turns orchestrator mode on or off for threads of one environment. False when nothing was saved. */
+const setOrchestratorMode = (
+  environmentId: EnvironmentId,
+  changes: ReadonlyArray<OrchestratorModeChange>,
+): Promise<boolean> =>
+  saveOrchestratorSettings(environmentId, "Orchestrator mode not changed", (settings) => {
+    let patch: ServerSettingsPatch | null = null;
+    let threads = settings.orchestratorThreads;
+    for (const change of changes) {
+      const next = orchestratorThreadsPatch(threads, change.threadId, change.on);
+      if (next?.orchestratorThreads === undefined) continue;
+      patch = next;
+      threads = next.orchestratorThreads;
+    }
+    return patch;
+  });
+
+/** Sets the effort this orchestrator's subagents start on; null follows the default. */
+export const setOrchestratorWorkerEffort = (
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  effort: string | null,
+): Promise<boolean> =>
+  saveOrchestratorSettings(environmentId, "Subagent effort not changed", (settings) =>
+    orchestratorThreadWorkerEffortPatch(settings.orchestratorThreadWorkerEfforts, threadId, effort),
+  );
+
 /** A new orchestrator starts on the orchestrator model when a provider offers it. */
 function applyOrchestratorModel(environmentId: EnvironmentId, draftId: DraftId) {
-  const selection = orchestratorModelSelection(readServerConfig(environmentId)?.providers ?? []);
+  const config = readServerConfig(environmentId);
+  if (config === undefined) return;
+  const selection = orchestratorModelSelection(config.providers, config.settings);
   if (selection === null) return;
   useComposerDraftStore.getState().setModelSelection(draftId, selection, { replaceOptions: true });
 }

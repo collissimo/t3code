@@ -14,7 +14,7 @@ import {
 
 import { isReasoningSelect } from "./modelTraits.ts";
 import type { ThreadStructure } from "./state/models.ts";
-import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
+import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/shared/model";
 
 export type HandoffTimelineRun = Pick<
   OrchestrationV2Run,

@@ -8,7 +8,7 @@ import {
   type RuntimeSubagent,
   type SubagentWorkflowGroup,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/client-runtime/state/thread-execution";
+import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/shared/model";
 import type {
   EnvironmentId,
   OrchestrationV2Subagent,

@@ -444,6 +444,22 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "orchestrator-effort",
+    title: "Orchestrator effort",
+    to: "/settings/threads",
+    searchTerms: ["orchestrator mode reasoning thinking effort default"],
+    environmentOnly: true,
+    scope: "environment-defaults",
+  },
+  {
+    id: "orchestrator-subagent-effort",
+    title: "Subagent effort",
+    to: "/settings/threads",
+    searchTerms: ["orchestrator mode worker subagent delegate reasoning thinking effort default"],
+    environmentOnly: true,
+    scope: "environment-defaults",
+  },
+  {
     id: "snooze-limited-threads",
     title: "Snooze until limits reset",
     to: "/settings/threads",
