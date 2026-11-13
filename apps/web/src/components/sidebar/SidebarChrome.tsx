@@ -8,6 +8,7 @@ import {
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { useOrchestratorModeToggle } from "../orchestrator/useOrchestratorModeToggle";
 
 import { useAtomValue } from "@effect/atom-react";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -203,17 +204,25 @@ function SidebarUtilityItem({
   icon,
   label,
   onClick,
+  pressed,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
+  /** Set for a switch; leave out for a button that opens a page. */
+  pressed?: boolean;
 }) {
   return (
     <SidebarMenuItem className="shrink-0">
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-label={label}
+              {...(pressed === undefined ? {} : { "aria-pressed": pressed, isActive: pressed })}
+              onClick={onClick}
+              size="icon"
+            >
               {icon}
             </SidebarMenuButton>
           }
@@ -249,9 +258,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/settings" });
   };
 
+  const orchestratorMode = useOrchestratorModeToggle();
   const handleOrchestratorClick = () => {
     closeMobileSidebar();
-    void navigate({ to: "/orchestrator" });
+    void orchestratorMode.toggle();
   };
 
   const handleUsageClick = () => {
@@ -291,8 +301,9 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ) : null}
           <SidebarUtilityItem
             icon={<NetworkIcon />}
-            label="Orchestrator"
+            label={orchestratorMode.on ? "Turn off orchestrator mode" : "Orchestrator mode"}
             onClick={handleOrchestratorClick}
+            pressed={orchestratorMode.on}
           />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}

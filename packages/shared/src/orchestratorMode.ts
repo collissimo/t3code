@@ -62,31 +62,3 @@ export function orchestratorThreadsPatch(
       : current.filter((id) => id !== threadId),
   };
 }
-
-/** A project's orchestrator: its listed thread that entered orchestrator mode last. */
-export function projectOrchestratorThread<
-  Thread extends {
-    readonly id: ThreadId;
-    readonly projectId: ProjectId;
-    readonly archivedAt: unknown;
-    readonly deletedAt: unknown;
-  },
->(
-  settings: Pick<ServerSettings, "orchestratorThreads">,
-  projectId: ProjectId,
-  threads: ReadonlyArray<Thread>,
-): Thread | null {
-  const listed = new Map(
-    threads
-      .filter(
-        (thread) =>
-          thread.projectId === projectId && thread.archivedAt === null && thread.deletedAt === null,
-      )
-      .map((thread) => [thread.id, thread]),
-  );
-  for (const threadId of [...settings.orchestratorThreads].reverse()) {
-    const thread = listed.get(threadId);
-    if (thread !== undefined) return thread;
-  }
-  return null;
-}

@@ -172,20 +172,22 @@ Code: `apps/server/src/scheduledTasks/ScheduledRunArchiveReactor.ts`,
 
 ### Orchestrator
 
-The network icon in the sidebar footer (or "Open orchestrator" in the command palette) lists the
-projects. Picking one opens its orchestrator: a thread whose agent plans the work, hands it to
-workers through `delegate_task`, checks what comes back and reports. It follows how Claude Code's
-Projects and its coordinator mode split the work. The thread is an ordinary thread with an
-"Orchestrator" badge, so it also shows in the sidebar and on mobile; its workers are listed under
-Lineage in the thread details.
+The network icon in the sidebar footer (or "Turn on orchestrator mode" in the command palette)
+switches orchestrator mode on and off for the open chat. Without an open chat it starts a new one
+in the mode. An orchestrator is an ordinary thread, marked with the network icon beside its title:
+its agent plans the work, hands it to workers through `delegate_task`, checks what comes back and
+reports. It follows how Claude Code's Projects and its coordinator mode split the work. Workers
+are listed under Lineage in the thread details.
 
-- A new orchestrator starts on Claude Fable 5.2 when a provider offers it; change the model in the
-  composer like in any thread. Workers start on the default model (Settings → General, or the
+- An unsent orchestrator starts on Claude Fable 5.2 when a provider offers it; change the model in
+  the composer like in any thread. Workers start on the default model (Settings → General, or the
   project's own default), so with Opus 5.5 as the default Fable leads Opus workers. The
   orchestrator passes another model to `delegate_task` only when asked. Without a default model
   workers inherit the orchestrator's.
-- The row's menu starts a new orchestrator for the project or turns the mode off, which leaves an
-  ordinary thread. A project's orchestrator is its newest open thread in orchestrator mode.
+- Picking another project on an unsent, empty orchestrator moves the mode to that project's draft.
+- The server must be a fork build. It says so with the `orchestratorMode` capability; on a server
+  without it (an upstream release) the switch reports that instead of saving a setting that
+  server would drop.
 - Orchestrator threads are the server setting `orchestratorThreads` (thread IDs), again so the fork
   adds no database migration. The server reads it per turn: the thread gets the instructions in
   `orchestratorModeInstructions.ts` (Claude: system prompt; Codex: additional context; other
@@ -196,5 +198,6 @@ Lineage in the thread details.
 
 Code: `packages/shared/src/orchestratorMode.ts`,
 `packages/provider-core/src/server/orchestratorModeInstructions.ts`,
-`apps/web/src/components/orchestrator/`, `withWorkerModel` in
+`apps/web/src/lib/orchestratorMode.ts`, `apps/web/src/components/orchestrator/`,
+`withWorkerModel` in
 `apps/server/src/mcp/OrchestratorMcpService.ts`.

@@ -320,6 +320,7 @@ export const ChatHeader = memo(function ChatHeader({
           </>
         ) : null}
         <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
+          <OrchestratorBadge environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
           {renamingTitle !== null ? (
             <input
               autoFocus
@@ -391,12 +392,6 @@ export const ChatHeader = memo(function ChatHeader({
                 Started by an agent on {activeThreadLinkOrigin} through a linked environment.
               </TooltipPopup>
             </Tooltip>
-          ) : null}
-          {renamingTitle === null ? (
-            <OrchestratorBadge
-              environmentId={activeThreadEnvironmentId}
-              threadId={activeThreadId}
-            />
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
