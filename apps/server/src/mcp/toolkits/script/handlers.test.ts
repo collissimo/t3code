@@ -171,5 +171,12 @@ it.effect("lists the tool only to credentials holding the script capability", ()
       );
     expect(yield* visibleTo(["script"])).toBe(true);
     expect(yield* visibleTo([])).toBe(false);
+    const outsideClient = yield* Effect.sync(enabledWhen).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, {
+        ...invocation(["script"]),
+        thread: undefined,
+      }),
+    );
+    expect(outsideClient).toBe(false);
   }),
 );
