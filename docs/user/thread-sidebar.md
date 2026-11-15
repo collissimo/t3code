@@ -296,6 +296,7 @@ access to the environment and is not available on Windows.
 prompt on top, the agent's to-do steps and the agents it started below it, and
 an agent's own agents or workflow phases below that. Green is done, orange is
 working, and a dashed circle has not started. Hover a node for its full text.
+A turn without to-do steps or agents shows only the prompt and its status.
 
 To choose what the thread details card shows, right-click the card or open
 **Settings → Appearance → Thread details**. Hidden rows keep their keyboard

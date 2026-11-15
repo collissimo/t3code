@@ -108,21 +108,23 @@ export function ThreadTaskGraph({
           <StatusDot node={root} />
           <span className="min-w-0 truncate text-foreground">{root.label}</span>
         </div>
-        <div className="overflow-x-auto pb-1" style={{ paddingTop: PILL_GAP }}>
-          <div className="relative mx-auto" style={{ width, height }}>
-            <svg
-              aria-hidden
-              className="absolute inset-0 overflow-visible text-border"
-              width={width}
-              height={height}
-            >
-              <path d={path} fill="none" stroke="currentColor" strokeWidth={1} />
-            </svg>
-            {all.map((entry) => (
-              <GraphNode key={entry.node.id} entry={entry} />
-            ))}
+        {all.length > 0 ? (
+          <div className="overflow-x-auto pb-1" style={{ paddingTop: PILL_GAP }}>
+            <div className="relative mx-auto" style={{ width, height }}>
+              <svg
+                aria-hidden
+                className="absolute inset-0 overflow-visible text-border"
+                width={width}
+                height={height}
+              >
+                <path d={path} fill="none" stroke="currentColor" strokeWidth={1} />
+              </svg>
+              {all.map((entry) => (
+                <GraphNode key={entry.node.id} entry={entry} />
+              ))}
+            </div>
           </div>
-        </div>
+        ) : null}
         <div className="flex h-6 min-w-0 items-center gap-3">
           <span className="min-w-0 flex-1 truncate text-muted-foreground">
             {current !== undefined ? (
@@ -134,12 +136,14 @@ export function ThreadTaskGraph({
               STATUS_LABEL[root.status]
             )}
           </span>
-          <span
-            className="shrink-0 font-medium text-muted-foreground tabular-nums"
-            aria-label={`${graph.completedLeafCount} of ${graph.leafCount} done`}
-          >
-            {graph.completedLeafCount}/{graph.leafCount}
-          </span>
+          {graph.leafCount > 0 ? (
+            <span
+              className="shrink-0 font-medium text-muted-foreground tabular-nums"
+              aria-label={`${graph.completedLeafCount} of ${graph.leafCount} done`}
+            >
+              {graph.completedLeafCount}/{graph.leafCount}
+            </span>
+          ) : null}
         </div>
       </div>
     </ThreadDetailsSection>
