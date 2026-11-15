@@ -2,14 +2,31 @@ import * as NodeAssert from "node:assert/strict";
 
 import { describe, it } from "vite-plus/test";
 
-import { codexAppServerArgs, codexExecLaunchArgs } from "./codexLaunchArgs.ts";
+import {
+  codexAppServerArgs,
+  codexExecLaunchArgs,
+  codexMcpListLaunchArgs,
+} from "./codexLaunchArgs.ts";
 
 describe("codexAppServerArgs", () => {
-  it("preserves escaped TOML quotes in config values", () => {
-    NodeAssert.deepStrictEqual(
-      codexAppServerArgs(String.raw`--config model=\"gpt-6.1-sol\" --strict-config`),
-      ["app-server", "--config", 'model="gpt-6.1-sol"', "--strict-config"],
-    );
+  it.each([
+    {
+      name: "preserves escaped TOML quotes in config values",
+      launchArgs: String.raw`--config model=\"gpt-6.1-sol\" --strict-config`,
+      expected: ["--config", 'model="gpt-6.1-sol"', "--strict-config"],
+    },
+    {
+      name: "lets launch args override the unload delay",
+      launchArgs: "-c thread_unload_delay_secs=1800",
+      expected: ["-c", "thread_unload_delay_secs=1800"],
+    },
+  ])("asks Codex to unload unsubscribed threads immediately and $name", (row) => {
+    NodeAssert.deepStrictEqual(codexAppServerArgs(row.launchArgs), [
+      "app-server",
+      "-c",
+      "thread_unload_delay_secs=0",
+      ...row.expected,
+    ]);
   });
 });
 
@@ -17,6 +34,8 @@ describe("codexAppServerArgs code mode", () => {
   it("enables code mode before launch args, so a user's --disable still wins", () => {
     NodeAssert.deepStrictEqual(codexAppServerArgs("--disable code_mode", { codeMode: true }), [
       "app-server",
+      "-c",
+      "thread_unload_delay_secs=0",
       "--enable",
       "code_mode",
       "-c",
@@ -24,7 +43,11 @@ describe("codexAppServerArgs code mode", () => {
       "--disable",
       "code_mode",
     ]);
-    NodeAssert.deepStrictEqual(codexAppServerArgs("", { codeMode: false }), ["app-server"]);
+    NodeAssert.deepStrictEqual(codexAppServerArgs("", { codeMode: false }), [
+      "app-server",
+      "-c",
+      "thread_unload_delay_secs=0",
+    ]);
   });
 });
 
@@ -39,6 +62,35 @@ describe("codexExecLaunchArgs", () => {
   it("does not pair value-taking flags with adjacent flags", () => {
     NodeAssert.deepStrictEqual(codexExecLaunchArgs("--config --strict-config --enable --disable"), [
       "--strict-config",
+    ]);
+  });
+});
+
+describe("codex exec and mcp list launch args", () => {
+  const launchArgs =
+    "--strict-config --oss --local-provider ollama --profile local -p=work --listen off --enable foo";
+
+  it("keeps the local model provider flags for codex exec", () => {
+    NodeAssert.deepStrictEqual(codexExecLaunchArgs(launchArgs), [
+      "--strict-config",
+      "--oss",
+      "--local-provider",
+      "ollama",
+      "--profile",
+      "local",
+      "-p=work",
+      "--enable",
+      "foo",
+    ]);
+  });
+
+  it("keeps the selected profile and drops exec-only flags for codex mcp list", () => {
+    NodeAssert.deepStrictEqual(codexMcpListLaunchArgs(launchArgs), [
+      "--profile",
+      "local",
+      "-p=work",
+      "--enable",
+      "foo",
     ]);
   });
 });
