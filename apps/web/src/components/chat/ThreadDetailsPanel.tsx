@@ -26,6 +26,7 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadTaskGraph } from "./ThreadTaskGraph";
 import {
   ThreadDetailsContext,
   ThreadDetailsUsage,
@@ -288,6 +289,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
               {visible.context && props.usage.contextWindow ? (
                 <ThreadDetailsContext usage={props.usage.contextWindow} />
+              ) : null}
+
+              {density !== "essential" && !props.draftId && visible.taskGraph ? (
+                <ThreadTaskGraph environmentId={props.environmentId} threadId={props.threadId} />
               ) : null}
 
               {/* Shown only when no section above has content, so an emptied card can be refilled. */}

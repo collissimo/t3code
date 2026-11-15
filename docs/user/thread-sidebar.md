@@ -292,6 +292,11 @@ Select a server to open it in the browser panel. **Stop** ends the server's job
 and keeps the agent, the terminal, and T3 Code running. Stop needs terminal
 access to the environment and is not available on Windows.
 
+**Task progress** at the bottom of the card draws the latest turn as a tree: your
+prompt on top, the agent's to-do steps and the agents it started below it, and
+an agent's own agents or workflow phases below that. Green is done, orange is
+working, and a dashed circle has not started. Hover a node for its full text.
+
 To choose what the thread details card shows, right-click the card or open
 **Settings → Appearance → Thread details**. Hidden rows keep their keyboard
 shortcuts, such as Open in editor and project scripts. **Reset to default** brings

@@ -395,6 +395,10 @@
       "types": "./src/state/contextWindow.ts",
       "default": "./src/state/contextWindow.ts"
     },
+    "./state/task-graph": {
+      "types": "./src/state/taskGraph.ts",
+      "default": "./src/state/taskGraph.ts"
+    },
     "./state/thread-subagents": {
       "types": "./src/state/threadSubagents.ts",
       "default": "./src/state/threadSubagents.ts"
