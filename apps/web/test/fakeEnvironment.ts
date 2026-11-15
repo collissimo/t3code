@@ -679,6 +679,18 @@ export async function createThread(thread: FakeThread): Promise<void> {
   }
 }
 
+/** Answers one RPC method with `handler` until disposed. */
+export function answerRpc(method: string, handler: (input: never) => unknown): Disposable {
+  const previous = handlers[method];
+  handlers[method] = handler;
+  return {
+    [Symbol.dispose]: () => {
+      if (previous) handlers[method] = previous;
+      else delete handlers[method];
+    },
+  };
+}
+
 export async function emitTerminalMetadata(event: TerminalMetadataStreamEvent): Promise<void> {
   if (terminalMetadataSubscriber === null) throw new Error("No terminal metadata subscription");
   await Effect.runPromise(Queue.offer(terminalMetadataSubscriber, event));
