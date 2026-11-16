@@ -156,7 +156,7 @@ function startOrder(subagent: OrchestrationV2Subagent): number {
 /**
  * The newest turn as a tree: the prompt, the agent's to-do steps, and the agents it started.
  * Agents nest under the agent that started them, and a workflow under its phases.
- * Null while the turn has neither steps nor agents to show.
+ * Null only before the thread's first turn starts; a turn without steps or agents is the prompt alone.
  */
 export function deriveTaskGraph(projection: Projection): TaskGraph | null {
   const run =
@@ -212,7 +212,6 @@ export function deriveTaskGraph(projection: Projection): TaskGraph | null {
     .map(agentNode);
 
   const children = [...steps, ...agents];
-  if (children.length === 0) return null;
 
   const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
   const root = node({

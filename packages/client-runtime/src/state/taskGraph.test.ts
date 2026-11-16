@@ -115,7 +115,7 @@ describe("deriveTaskGraph", () => {
     expect(graph?.running.map((node) => node.label)).toEqual(["Write code", "lead", "review"]);
   });
 
-  it("follows the newest started turn and stops the step a stopped turn left running", () => {
+  it("follows the newest started turn, stops the step it left running, and keeps a stepless turn", () => {
     const projection: Projection = {
       runs: [
         run("run-2", 2, "interrupted"),
@@ -138,6 +138,9 @@ describe("deriveTaskGraph", () => {
     expect(graph && shape(graph.root)).toEqual({
       "Second:stopped": ["Done:completed", "Half:stopped", "Later:pending"],
     });
-    expect(deriveTaskGraph({ ...projection, plans: [] })).toBeNull();
+    const promptOnly = deriveTaskGraph({ ...projection, plans: [] });
+    expect(promptOnly && shape(promptOnly.root)).toBe("Second:stopped");
+    expect(promptOnly?.leafCount).toBe(0);
+    expect(deriveTaskGraph({ ...projection, runs: [] })).toBeNull();
   });
 });
