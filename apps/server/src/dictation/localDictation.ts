@@ -18,7 +18,7 @@ import {
   type TranscriptResult,
 } from "./DictationEngine.ts";
 import { findModel, findVadModel, modelDirectories } from "./modelFiles.ts";
-import { DEFAULT_STRUCTURE_CODEWORDS, removeFillers, splitCodeword } from "./transcriptText.ts";
+import { DEFAULT_STRUCTURE_CODEWORDS, splitCodeword } from "./transcriptText.ts";
 
 const IDLE_UNLOAD_MS = 15 * 60_000;
 export const HOUSEKEEPING_INTERVAL_MS = 30_000;
@@ -102,7 +102,7 @@ export function finishResult(result: TranscriptResult): DictationFinishResult {
   if (result.reason !== undefined) {
     return { text: "", reason: result.reason, structureRequested: false };
   }
-  const cleaned = splitCodeword(removeFillers(result.text), DEFAULT_STRUCTURE_CODEWORDS);
+  const cleaned = splitCodeword(result.text, DEFAULT_STRUCTURE_CODEWORDS);
   if (cleaned.text === "") return { text: "", reason: "no-speech", structureRequested: false };
   return { text: cleaned.text, structureRequested: cleaned.found };
 }

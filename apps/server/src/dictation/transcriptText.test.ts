@@ -1,35 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { DEFAULT_STRUCTURE_CODEWORDS, removeFillers, splitCodeword } from "./transcriptText.ts";
-
-describe("removeFillers", () => {
-  it.each([
-    ["Okay. Ähm, mir ist gerade etwas aufgefallen.", "Okay. Mir ist gerade etwas aufgefallen."],
-    ["dass es keinen Modus gibt, ähm, der mir hilft", "dass es keinen Modus gibt, der mir hilft"],
-    ["und äh das war es", "und das war es"],
-    ["und äh, das war es", "und das war es"],
-    ["Das ist gut äh, aber teuer", "Das ist gut aber teuer"],
-    [
-      "mit meiner Stimme äh, aufzunehmen. Die äh, ist besser.",
-      "mit meiner Stimme aufzunehmen. Die ist besser.",
-    ],
-    ["Das passt. Ähm... Du kannst das Repo ziehen.", "Das passt. Du kannst das Repo ziehen."],
-    ["Ähm, genau, und es soll passen", "Genau, und es soll passen"],
-    ["Das Fenster, äh. Und dann", "Das Fenster. Und dann"],
-    ["Das war's äh.", "Das war's."],
-    ["Hm, mh, also ich denke mhm ja", "Also ich denke ja"],
-    ["um das zu testen, ähm, um zu sehen", "um das zu testen, um zu sehen"],
-    ["Das ist ähnlich wie bei Ämtern und Öhmd", "Das ist ähnlich wie bei Ämtern und Öhmd"],
-    ["5 mm Abstand und um 9 Uhr", "5 mm Abstand und um 9 Uhr"],
-    ["uh, please refactor this, uhm, function", "Please refactor this, function"],
-    ["Erste Zeile ähm\nzweite Zeile", "Erste Zeile\nzweite Zeile"],
-    ["Ähm.", ""],
-    ["Kein Füllwort hier.", "Kein Füllwort hier."],
-    ["weil, äh, ich das hm brauche", "weil, ich das brauche"],
-  ])("%j", (spoken, expected) => {
-    expect(removeFillers(spoken)).toBe(expected);
-  });
-});
+import { DEFAULT_STRUCTURE_CODEWORDS, splitCodeword } from "./transcriptText.ts";
 
 describe("splitCodeword", () => {
   const codewords = ["Reinschrift", "Prompt aufräumen"];
