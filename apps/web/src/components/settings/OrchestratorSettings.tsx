@@ -6,7 +6,7 @@ import {
 
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -56,6 +56,7 @@ export function OrchestratorSettings({ providers }: { providers: ReadonlyArray<S
   const updateSettings = useUpdateScopedSettings();
   const mixedEffort = useScopedSettingsMixed(["orchestratorEffort"]);
   const mixedWorkerEffort = useScopedSettingsMixed(["orchestratorWorkerEffort"]);
+  const searchableSetting = useSearchableSetting();
   return (
     <SettingsSection id="orchestrator" title="Orchestrator">
       <SettingsRow

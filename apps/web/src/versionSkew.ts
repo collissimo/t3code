@@ -8,9 +8,11 @@ import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
+import { msg } from "gt-react";
 
 import { APP_VERSION } from "./branding";
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
+import { m, type MessageResolver } from "./i18n/messages";
 
 export interface VersionMismatch {
   readonly clientVersion: string;
@@ -50,6 +52,7 @@ function versionCore(version: string): string {
 export function resolveVersionMismatch(
   serverVersion: string | null | undefined,
   clientVersion: string = APP_VERSION,
+  resolve: MessageResolver = m,
 ): VersionMismatch | null {
   const normalizedClientVersion = normalizeVersion(clientVersion);
   const normalizedServerVersion = normalizeVersion(serverVersion);
@@ -77,7 +80,9 @@ export function resolveVersionMismatch(
     clientVersion: normalizedClientVersion,
     serverVersion: normalizedServerVersion,
     targetVersion: normalizedClientVersion,
-    hint: "Version mismatch. Try syncing the client and server to the same T3 Code version.",
+    hint: resolve(
+      msg("Version mismatch. Try syncing the client and server to the same T3 Code version."),
+    ),
   };
 }
 
@@ -97,7 +102,12 @@ export function resolveServerConfigVersionMismatch(
   {
     clientVersion = APP_VERSION,
     stableRelease = null,
-  }: { readonly clientVersion?: string; readonly stableRelease?: string | null } = {},
+    resolve = m,
+  }: {
+    readonly clientVersion?: string;
+    readonly stableRelease?: string | null;
+    readonly resolve?: MessageResolver;
+  } = {},
 ): VersionMismatch | null {
   const serverVersion = serverConfig?.environment.serverVersion;
   // A desktop app updates only from the feed it was built for, so a desktop-managed server on
@@ -114,13 +124,13 @@ export function resolveServerConfigVersionMismatch(
     followsStableReleases(serverConfig) &&
     cliReleaseChannelOf(clientVersion) !== "stable"
   ) {
-    const behind = resolveVersionMismatch(serverVersion, stableRelease);
-    return behind && { ...behind, clientVersion, hint: STABLE_UPDATE_HINT };
+    const behind = resolveVersionMismatch(serverVersion, stableRelease, resolve);
+    return behind && { ...behind, clientVersion, hint: resolve(STABLE_UPDATE_HINT) };
   }
-  return resolveVersionMismatch(serverVersion, clientVersion);
+  return resolveVersionMismatch(serverVersion, clientVersion, resolve);
 }
 
-const STABLE_UPDATE_HINT = "A newer stable release is available for this server.";
+const STABLE_UPDATE_HINT = msg("A newer stable release is available for this server.");
 
 /** A stable server whose own updater (or its operator) moves it, not a desktop app's feed. */
 export function followsStableReleases(
