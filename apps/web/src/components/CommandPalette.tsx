@@ -1511,9 +1511,11 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:open-thread-pull-requests",
-      searchTerms: ["pull requests", "linked", "stack", "prs"],
-      title: gt("Show linked pull requests"),
-      disabled: visibleThreadPullRequests(activeThread.pullRequests).length === 0,
+      searchTerms: ["pull requests", "issues", "linked", "stack", "prs"],
+      title: gt("Show linked items"),
+      disabled:
+        visibleThreadPullRequests(activeThread.pullRequests).length === 0 &&
+        !activeThread.issues?.length,
       icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
       run: async () => {
         useRightPanelStore.getState().open(threadRef, "pull-requests");
@@ -1740,7 +1742,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:orchestrator",
     searchTerms: ["orchestrator", "orchestrate", "coordinator", "workers", "delegate", "agents"],
-    title: orchestratorMode.on ? "Turn off orchestrator mode" : "Turn on orchestrator mode",
+    title: orchestratorMode.on ? gt("Turn off orchestrator mode") : gt("Turn on orchestrator mode"),
     icon: <NetworkIcon className={ITEM_ICON_CLASS} />,
     run: orchestratorMode.toggle,
   });
