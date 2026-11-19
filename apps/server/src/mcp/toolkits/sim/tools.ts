@@ -89,7 +89,8 @@ const SimReadTool = Tool.make("sim_read", {
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true);
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileSimOff);
 
 const SimWriteTool = Tool.make("sim_write", {
   ...shared,
@@ -150,7 +151,7 @@ const SimWriteTool = Tool.make("sim_write", {
 })
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
-  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClientsOrSimOff);
 
 const SimApplyHarnessChangeTool = Tool.make("sim_apply_harness_change", {
   ...shared,
@@ -183,6 +184,6 @@ const SimApplyHarnessChangeTool = Tool.make("sim_apply_harness_change", {
 })
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
-  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClientsOrSimOff);
 
 export const SimToolkit = Toolkit.make(SimReadTool, SimWriteTool, SimApplyHarnessChangeTool);

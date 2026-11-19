@@ -64,10 +64,20 @@ export function SettingsLabsRouteScreen() {
           )}
         />
         <MachineBetaSection
-          title="Script tool"
+          title={gt("Script tool")}
           icon="terminal"
           setting="scriptToolEnabled"
-          description="Let agents in full-access threads run one program that makes many tool calls and reads only what it prints. Its file and shell calls skip provider permission prompts."
+          description={gt(
+            "Let agents in full-access threads run one program that makes many tool calls and reads only what it prints. Its file and shell calls skip provider permission prompts.",
+          )}
+        />
+        <MachineBetaSection
+          title={gt("Self-Improvement Memory (SIM)")}
+          icon="brain"
+          setting="sim"
+          description={gt(
+            "Share harness rules, read-before-write guards, live telemetry, and SIM tools across providers. Turning it off hides SIM tools, stops rule injection on the next turn, and pauses the observer.",
+          )}
         />
       </ScrollView>
     </SettingsScreen>
@@ -266,7 +276,8 @@ export function NewThreadSettingsSection() {
 type MachineBetaSetting =
   | "linkedEnvironmentsEnabled"
   | "fastWorktreeCheckout"
-  | "scriptToolEnabled";
+  | "scriptToolEnabled"
+  | "sim";
 
 /** One switch per connected machine that offers the beta, since each machine's own setting decides. */
 function MachineBetaSection({
@@ -301,7 +312,11 @@ function MachineBetaSection({
       <SettingsSection title={gt("Beta: {feature}", { feature: title })}>
         {supported.map((environment) => {
           const policy = environment.serverConfig?.managedPolicy;
-          const managed = isManagedSettingPath(policy, setting);
+          const managed = isManagedSettingPath(policy, setting === "sim" ? "sim.enabled" : setting);
+          const value =
+            setting === "sim"
+              ? environment.serverConfig?.settings.sim.enabled === true
+              : environment.serverConfig?.settings[setting] === true;
           return (
             <SettingsSwitchRow
               key={environment.environmentId}
@@ -314,18 +329,20 @@ function MachineBetaSection({
                     }),
                   }
                 : {})}
-              value={environment.serverConfig?.settings[setting] === true}
+              value={value}
               disabled={managed || !writable.has(environment.environmentId)}
-              onValueChange={(value) =>
+              onValueChange={(nextValue) =>
                 void updateSettings({
                   environmentId: environment.environmentId,
                   input: {
                     patch:
                       setting === "linkedEnvironmentsEnabled"
-                        ? { linkedEnvironmentsEnabled: value }
+                        ? { linkedEnvironmentsEnabled: nextValue }
                         : setting === "fastWorktreeCheckout"
-                          ? { fastWorktreeCheckout: value }
-                          : { scriptToolEnabled: value },
+                          ? { fastWorktreeCheckout: nextValue }
+                          : setting === "sim"
+                            ? { sim: { enabled: nextValue } }
+                            : { scriptToolEnabled: nextValue },
                   },
                 })
               }

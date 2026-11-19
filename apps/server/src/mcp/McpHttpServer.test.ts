@@ -63,6 +63,7 @@ import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { SimToolkit } from "./toolkits/sim/tools.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
@@ -1753,6 +1754,129 @@ it.effect("hides tools for links and refuses another environment while the beta 
       });
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "hides SIM tools from tools/list while sim.enabled is off and restores them when on",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadToken = "sim-thread-token";
+        const clientToken = "sim-client-token";
+        const threadScope: McpInvocationContext.McpThreadInvocationScope = {
+          environmentId,
+          requestNamespace: threadToken,
+          thread: {
+            threadId: ThreadId.make("thread-sim-toggle"),
+            providerSessionId: threadToken,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+          client: undefined,
+          capabilities: new Set(["orchestration"]),
+          issuedAt: 1,
+        };
+        const clientScope: McpInvocationContext.McpClientInvocationScope = {
+          environmentId,
+          requestNamespace: clientToken,
+          thread: undefined,
+          client: {
+            sessionId: "outside-sim-client",
+            label: "Outside",
+            access: "full-access",
+          },
+          capabilities: new Set(["orchestration"]),
+          issuedAt: 1,
+        };
+        const settingsContext = yield* Layer.build(ServerSettings.layerTest());
+        const settings = Context.get(settingsContext, ServerSettings.ServerSettingsService);
+        const serverLayer = McpHttpServer.layerMcpTransport(
+          McpHttpServer.toolkitRegistration(
+            SimToolkit,
+            McpToolAccess.toLayer(SimToolkit, {
+              sim_read: McpToolAccess.reads(() => Effect.succeed({ ok: true })),
+              sim_write: McpToolAccess.writes(() => Effect.succeed({ ok: true })),
+              sim_apply_harness_change: McpToolAccess.writes(() => Effect.succeed({ ok: true })),
+            }),
+          ),
+        ).pipe(
+          Layer.provide(Layer.succeedContext(settingsContext)),
+          Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+          Layer.provide(
+            Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+              resolve: (presented) =>
+                Effect.succeed(
+                  presented === threadToken
+                    ? threadScope
+                    : presented === clientToken
+                      ? clientScope
+                      : undefined,
+                ),
+            }),
+          ),
+        );
+        yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
+          Layer.build,
+        );
+        const httpClient = yield* HttpClient.HttpClient;
+        const openSession = (token: string) =>
+          Effect.gen(function* () {
+            const headers = {
+              accept: "application/json, text/event-stream",
+              authorization: `Bearer ${token}`,
+            };
+            const initialize = yield* httpClient.post("/mcp", {
+              headers,
+              body: HttpBody.text(
+                `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+                "application/json",
+              ),
+            });
+            return () =>
+              httpClient
+                .post("/mcp", {
+                  headers: {
+                    ...headers,
+                    "mcp-session-id": initialize.headers["mcp-session-id"]!,
+                    "mcp-protocol-version": "2025-06-18",
+                  },
+                  body: HttpBody.text(
+                    JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+                    "application/json",
+                  ),
+                })
+                .pipe(
+                  Effect.flatMap((response) => response.json),
+                  Effect.map((body) =>
+                    (
+                      body as { result: { tools: ReadonlyArray<{ name: string }> } }
+                    ).result.tools.map((tool) => tool.name),
+                  ),
+                );
+          });
+
+        const listForThread = yield* openSession(threadToken);
+        const listForClient = yield* openSession(clientToken);
+
+        expect(yield* listForThread()).toEqual([
+          "sim_read",
+          "sim_write",
+          "sim_apply_harness_change",
+        ]);
+        expect(yield* listForClient()).toEqual(["sim_read"]);
+
+        yield* settings.updateSettings({ sim: { enabled: false } });
+        expect(yield* listForThread()).toEqual([]);
+        expect(yield* listForClient()).toEqual([]);
+
+        yield* settings.updateSettings({ sim: { enabled: true } });
+        expect(yield* listForThread()).toEqual([
+          "sim_read",
+          "sim_write",
+          "sim_apply_harness_change",
+        ]);
+        expect(yield* listForClient()).toEqual(["sim_read"]);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("lists pull request watch tools only to threads that are not delegated children", () =>

@@ -27,6 +27,7 @@ export function LabsSettingsPanel() {
         <PromptSuggestionsRow />
         <SimlockHostsRow />
         <ScriptToolRow />
+        <SimRow />
         <FastWorktreeCheckoutRow />
       </SettingsSection>
     </SettingsPageContainer>
@@ -260,18 +261,51 @@ function ScriptToolRow() {
   const settings = useScopedSettings();
   const searchableSetting = useSearchableSetting();
   const updateSettings = useUpdateScopedSettings();
+  const gt = useGT();
   return (
     <SettingsRow
       serverScoped
       {...searchableSetting("script-tool")}
       settingKeys={["scriptToolEnabled"]}
-      description="Let agents in full-access threads run one program that makes many tool calls and reads only what it prints. Its file and shell calls skip provider permission prompts."
+      description={gt(
+        "Let agents in full-access threads run one program that makes many tool calls and reads only what it prints. Its file and shell calls skip provider permission prompts.",
+      )}
       control={
         <ScopedSwitch
           settingKeys={["scriptToolEnabled"]}
           checked={settings.scriptToolEnabled}
           onCheckedChange={(checked) => updateSettings({ scriptToolEnabled: Boolean(checked) })}
-          aria-label="Script tool"
+          aria-label={gt("Script tool")}
+        />
+      }
+    />
+  );
+}
+
+function SimRow() {
+  const searchableSetting = useSearchableSetting();
+  const { targets } = useSettingsScope();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const gt = useGT();
+  const mixed =
+    targets.length > 1 &&
+    targets.some((target) => target.settings.sim.enabled !== targets[0]?.settings.sim.enabled);
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("self-improvement-memory")}
+      settingKeys={["sim"]}
+      mixed={mixed}
+      description={gt(
+        "Share harness rules, read-before-write guards, live telemetry, and SIM tools across providers. Turning it off hides SIM tools, stops rule injection on the next turn, and pauses the observer.",
+      )}
+      control={
+        <Switch
+          mixed={mixed}
+          checked={mixed ? false : settings.sim.enabled}
+          onCheckedChange={(checked) => updateSettings({ sim: { enabled: Boolean(checked) } })}
+          aria-label={gt("Self-Improvement Memory (SIM)")}
         />
       }
     />

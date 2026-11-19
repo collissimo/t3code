@@ -143,6 +143,8 @@ export interface McpInvocationScope {
   readonly client: McpClientCaller | undefined;
   /** False while the Linked environments beta is off here; `/mcp` reads it per request. */
   readonly linkedEnvironments?: boolean;
+  /** False while Self-Improvement Memory (SIM) is turned off in settings; `/mcp` reads it per request. */
+  readonly simEnabled?: boolean;
   /**
    * The origin this `/mcp` request reached, e.g. a T3 Connect tunnel. Hosted clients cannot
    * see the URL they were configured with, so links they must fetch carry it. Unset in-process.
@@ -207,9 +209,22 @@ export const hiddenWhileScriptToolOff = (): boolean => {
   return scope?.thread !== undefined && scope.capabilities.has("script");
 };
 
+/** `McpSchema.EnabledWhen` for SIM tools, hidden while Self-Improvement Memory is off. */
+export const hiddenWhileSimOff = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.simEnabled !== false;
+};
+
+/** `McpSchema.EnabledWhen` for thread-bound SIM write tools, hidden from outside clients or while SIM is off. */
+export const hiddenFromOutsideClientsOrSimOff = (): boolean =>
+  hiddenFromOutsideClients() && hiddenWhileSimOff();
+
 /** Every `McpSchema.EnabledWhen` that hides a tool from outside clients, which `McpToolAccess` requires on thread-bound tools. */
 export const isHiddenFromOutsideClients = (enabledWhen: unknown): boolean =>
-  enabledWhen === hiddenFromOutsideClients || enabledWhen === hiddenWhileScriptToolOff;
+  enabledWhen === hiddenFromOutsideClients ||
+  enabledWhen === hiddenWhileScriptToolOff ||
+  enabledWhen === hiddenFromOutsideClientsOrSimOff;
 
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"
   ? PreviewAutomationUnavailableError

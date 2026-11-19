@@ -450,4 +450,24 @@ describe("SimAuditService", () => {
       }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
     },
   );
+
+  it.effect("refuses audit, inspectThread, and markAuditDone while sim.enabled is off", () => {
+    const sb = sandbox();
+    return Effect.gen(function* () {
+      yield* seedWorld(sb.harnessDir);
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const audit = yield* SimAuditService;
+
+      yield* settings.updateSettings({ sim: { enabled: false } });
+      expect((yield* Effect.flip(audit.audit(auditor, { includeClaudeLogs: false }))).code).toBe(
+        "disabled",
+      );
+      expect((yield* Effect.flip(audit.inspectThread(auditor, "thread-co"))).code).toBe("disabled");
+      expect((yield* Effect.flip(audit.markAuditDone(auditor))).code).toBe("disabled");
+
+      yield* settings.updateSettings({ sim: { enabled: true } });
+      const inspection = yield* audit.inspectThread(auditor, "thread-co");
+      expect(inspection.threadId).toBe("thread-codex");
+    }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
+  });
 });
