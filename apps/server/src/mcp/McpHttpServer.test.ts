@@ -63,6 +63,7 @@ import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { SimAuditService, SimService } from "../sim/SimContracts.ts";
 import { SimToolkit } from "./toolkits/sim/tools.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 
@@ -1775,7 +1776,7 @@ it.effect(
           capabilities: new Set(["orchestration"]),
           issuedAt: 1,
         };
-        const clientScope: McpInvocationContext.McpClientInvocationScope = {
+        const clientScope: McpInvocationContext.McpInvocationScope = {
           environmentId,
           requestNamespace: clientToken,
           thread: undefined,
@@ -1793,23 +1794,31 @@ it.effect(
           McpHttpServer.toolkitRegistration(
             SimToolkit,
             McpToolAccess.toLayer(SimToolkit, {
-              sim_read: McpToolAccess.reads(() => Effect.succeed({ ok: true })),
-              sim_write: McpToolAccess.writes(() => Effect.succeed({ ok: true })),
-              sim_apply_harness_change: McpToolAccess.writes(() => Effect.succeed({ ok: true })),
+              sim_read: McpToolAccess.reads(() => Effect.succeed({ action: "index", text: "" })),
+              sim_write: McpToolAccess.writes(() => Effect.succeed({ action: "record", text: "" })),
+              sim_apply_harness_change: McpToolAccess.writes(() =>
+                Effect.succeed({ dryRun: true, file: "AGENTS.md", text: "" }),
+              ),
             }),
           ),
         ).pipe(
           Layer.provide(Layer.succeedContext(settingsContext)),
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+          Layer.provide(Layer.mock(SimService)({})),
+          Layer.provide(Layer.mock(SimAuditService)({})),
           Layer.provide(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({
               resolve: (presented) =>
+                Effect.succeed(presented === threadToken ? threadScope : undefined),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+              authenticate: (request) =>
                 Effect.succeed(
-                  presented === threadToken
-                    ? threadScope
-                    : presented === clientToken
-                      ? clientScope
-                      : undefined,
+                  request.headers.authorization === `Bearer ${clientToken}`
+                    ? clientScope
+                    : undefined,
                 ),
             }),
           ),
