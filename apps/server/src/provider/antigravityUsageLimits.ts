@@ -38,6 +38,15 @@ const TokenFile = Schema.Struct({
   refresh_token: Schema.NonEmptyString,
   project_id: Schema.optional(Schema.String),
 });
+// agy 1.5+ stores its Google sign-in without client credentials; it refreshes the token with
+// its own installed-app OAuth client, which ships in every agy binary and is public by design.
+const AGY_OAUTH_CLIENT = {
+  client_id: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+  client_secret: "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",
+};
+const AgyTokenFile = Schema.Struct({
+  token: Schema.Struct({ refresh_token: Schema.NonEmptyString }),
+});
 const TokenResponse = Schema.Struct({
   access_token: Schema.NonEmptyString,
   expires_in: Schema.Number.check(Schema.isGreaterThan(0)),
@@ -78,6 +87,7 @@ const Models = Schema.Struct({
 });
 
 const decodeTokenFile = Schema.decodeEffect(Schema.fromJsonString(TokenFile));
+const decodeAgyTokenFile = Schema.decodeEffect(Schema.fromJsonString(AgyTokenFile));
 const decodeTokenResponse = Schema.decodeUnknownEffect(TokenResponse);
 const decodeUserInfo = Schema.decodeUnknownEffect(UserInfo);
 const decodeSummary = Schema.decodeUnknownEffect(Summary);
@@ -217,7 +227,24 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const crypto = yield* Digest.Digest;
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
-  const tokenPath = path.join(input.profileDirectory, "antigravity-acp", "acp_token.json");
+  const acpDirectory = path.join(input.profileDirectory, "antigravity-acp");
+  const agyTokenPath = path.join(acpDirectory, "antigravity-oauth-token");
+  const legacyTokenPath = path.join(acpDirectory, "acp_token.json");
+  // Prefer agy's current token file; a legacy one may linger from an older agy with a revoked token.
+  const readToken = Effect.gen(function* () {
+    if (yield* fs.exists(agyTokenPath)) {
+      const file = yield* fs.readFileString(agyTokenPath).pipe(Effect.flatMap(decodeAgyTokenFile));
+      const token: typeof TokenFile.Type = {
+        ...AGY_OAUTH_CLIENT,
+        refresh_token: file.token.refresh_token,
+      };
+      return token;
+    }
+    if (yield* fs.exists(legacyTokenPath)) {
+      return yield* fs.readFileString(legacyTokenPath).pipe(Effect.flatMap(decodeTokenFile));
+    }
+    return undefined;
+  });
   let cached:
     | { fingerprint: string; account: string; accessToken: string; expiresAt: number }
     | undefined;
@@ -236,7 +263,8 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     if (input.authMethod !== "oauth-personal" && input.authMethod !== "oauth-business") {
       return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     }
-    if (!(yield* fs.exists(tokenPath))) {
+    const token = yield* readToken;
+    if (token === undefined) {
       cached = undefined;
       return makeUnavailableUsageLimits({
         checkedAt,
@@ -244,7 +272,6 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
         message: "Sign in with Google to see Antigravity limits.",
       });
     }
-    const token = yield* fs.readFileString(tokenPath).pipe(Effect.flatMap(decodeTokenFile));
     const fingerprint = yield* sha256(
       `${token.client_id}\0${token.refresh_token}\0${token.project_id ?? ""}`,
     );
