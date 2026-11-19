@@ -215,7 +215,11 @@ epochs per thread). Nothing lives in SQLite, so the fork adds no database migrat
 
 - Settings are the server setting `sim`: `enabled`, `simDir` and `harnessDir` (default
   `~/.claude/sim` and `~/.claude`), `injectRules`, `ruleFiles`, `providerOverrides` (on or off per
-  provider) and `advisorModelSelection`. The advisor defaults to `claudeAgent` /
+  provider) and `advisorModelSelection`. A toggle in **Settings → Labs** (web, desktop, and mobile)
+  and in the command palette switches `sim.enabled` live per environment without restarting the
+  server: turning it off hides `sim_read`, `sim_write`, and `sim_apply_harness_change` from MCP
+  `tools/list`, blocks SIM and audit tool calls, stops rule injection on the next turn, and pauses
+  `SimObserverReactor`. The advisor defaults to `claudeAgent` /
   `claude-fable-5-2`; any available model works (for example `antigravity` / `gemini-4-argon`),
   and `null` turns it off. It never runs by itself: SIM only suggests a `delegate_task` with
   `role: "design"` for the hard cases, such as an attempt that keeps failing or rules that

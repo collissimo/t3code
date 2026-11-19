@@ -678,17 +678,19 @@ const make = Effect.gen(function* () {
     return { threads, runs, messages, items, events, projects, providerThreads, forkParents };
   });
 
+  const requireSimEnabled = serverSettings.getSettings.pipe(
+    Effect.mapError(ioError),
+    Effect.filterOrFail(
+      (settings) => settings.sim.enabled,
+      () => new SimServiceError({ code: "disabled", problems: ["SIM is turned off in settings"] }),
+    ),
+  );
+
   const audit: SimAuditService["Service"]["audit"] = Effect.fn("SimAuditService.audit")(function* (
     caller: SimCallerContext,
     options: SimAuditOptions = {},
   ) {
-    const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(ioError));
-    if (!settings.sim.enabled) {
-      return yield* new SimServiceError({
-        code: "disabled",
-        problems: ["SIM is turned off in settings"],
-      });
-    }
+    const settings = yield* requireSimEnabled;
     const snapshot = yield* sim.getStateSnapshot();
     if (!snapshot)
       return yield* new SimServiceError({ code: "disabled", problems: ["SIM is not available"] });
@@ -730,6 +732,7 @@ const make = Effect.gen(function* () {
   const inspectThread: SimAuditService["Service"]["inspectThread"] = Effect.fn(
     "SimAuditService.inspectThread",
   )(function* (_caller, threadIdPrefix) {
+    yield* requireSimEnabled;
     const wanted = threadIdPrefix.trim();
     if (!wanted)
       return yield* new SimServiceError({
@@ -799,6 +802,7 @@ const make = Effect.gen(function* () {
   const markAuditDone: SimAuditService["Service"]["markAuditDone"] = Effect.fn(
     "SimAuditService.markAuditDone",
   )(function* (caller) {
+    yield* requireSimEnabled;
     const paths = yield* sim.resolvePaths();
     const nowMs = yield* Clock.currentTimeMillis;
     const now = yield* Effect.try({

@@ -587,6 +587,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("beta programmatic tool calling javascript program sandbox code mode")],
   },
   {
+    id: "self-improvement-memory",
+    title: msg("Self-Improvement Memory (SIM)"),
+    to: "/settings/labs",
+    scope: "environment",
+    searchTerms: [
+      msg("beta sim rsi self improvement memory harness rules agents md audit telemetry"),
+    ],
+  },
+  {
     id: "worktree-fast-checkout",
     title: msg("Fast worktree checkout"),
     to: "/settings/labs",

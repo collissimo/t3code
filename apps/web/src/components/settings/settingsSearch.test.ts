@@ -74,6 +74,18 @@ describe("searchSettings", () => {
         scope: "environment-defaults",
       });
     }
+    expect(searchSettings("self-improvement")[0]).toMatchObject({
+      id: "self-improvement-memory",
+      to: "/settings/labs",
+      scope: "environment",
+    });
+    expect(searchSettings("sim")).toContainEqual(
+      expect.objectContaining({
+        id: "self-improvement-memory",
+        to: "/settings/labs",
+        scope: "environment",
+      }),
+    );
   });
 
   it("hides the Secrets page from nav and search while the secrets feature is disabled", () => {

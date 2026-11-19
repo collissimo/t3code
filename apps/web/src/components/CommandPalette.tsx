@@ -61,6 +61,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  BrainIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -105,6 +106,7 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOrchestratorModeToggle } from "./orchestrator/useOrchestratorModeToggle";
+import { useSimEnabledToggle } from "../lib/simToggle";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import {
@@ -724,6 +726,16 @@ function OpenCommandPaletteDialog(props: {
       ?.serverConfig?.threadFind === true;
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
+  const connectedEnvironments = environments.filter(
+    (environment) => environment.connection.phase === "connected",
+  );
+  const simEnvironmentId =
+    currentProjectEnvironmentId ??
+    (paletteRouteTarget?.kind === "server" ? paletteRouteTarget.threadRef.environmentId : null) ??
+    primaryEnvironmentId ??
+    connectedEnvironments[0]?.environmentId ??
+    null;
+  const simToggle = useSimEnabledToggle(simEnvironmentId);
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
   const scratchTargetEnvironmentId = scratchEnvironmentId(currentProjectEnvironmentId);
   const supportsTriage = (environmentId: EnvironmentId | null) =>
@@ -1746,6 +1758,22 @@ function OpenCommandPaletteDialog(props: {
     icon: <NetworkIcon className={ITEM_ICON_CLASS} />,
     run: orchestratorMode.toggle,
   });
+
+  if (simToggle.available) {
+    actionItems.push({
+      kind: "action",
+      value: "action:sim-toggle",
+      searchTerms: ["sim", "rsi", "self-improvement", "memory", "harness", "rules", "agents"],
+      title: simToggle.enabled
+        ? gt("Turn off Self-Improvement Memory (SIM)")
+        : gt("Turn on Self-Improvement Memory (SIM)"),
+      ...(connectedEnvironments.length > 1 && simToggle.environmentLabel !== null
+        ? { description: simToggle.environmentLabel }
+        : {}),
+      icon: <BrainIcon className={ITEM_ICON_CLASS} />,
+      run: simToggle.toggle,
+    });
+  }
 
   actionItems.push({
     kind: "action",
