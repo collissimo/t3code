@@ -320,6 +320,20 @@ describe("buildSimThreadInstructions", () => {
     assert.include(guide, "`~/.claude/AGENTS.md`, `~/.claude/notes/late.md` for the rest");
   });
 
+  it("injects a 20 KB rules file to its last rule", () => {
+    const bullets = Array.from(
+      { length: 200 },
+      (_, index) =>
+        `- Rule ${String(index).padStart(3, "0")}: ${"keep this rule in view ".repeat(4)}`,
+    );
+    const rulesFile = `# Rules\n\n${bullets.join("\n")}\n`;
+    assert.isAbove(Buffer.byteLength(rulesFile, "utf8"), 20_000);
+    using fixture = makeFixture({ "AGENTS.md": rulesFile });
+    const sections = buildSimThreadInstructions(fixture.input());
+    assert.include(sections.join("\n"), "- Rule 199:", "the end of the file is not cut off");
+    assert.notInclude(sections.at(-1)!, "for the rest");
+  });
+
   it("offers the advisor only when one is configured", () => {
     using fixture = makeFixture({ "AGENTS.md": RULES });
     const guide = (sim: Partial<SimSettingsConfig>) =>

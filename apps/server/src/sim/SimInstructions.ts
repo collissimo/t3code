@@ -21,7 +21,8 @@ import {
 
 /** Margin below Codex's 4,000-byte per-entry truncation (`CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES`). */
 export const SIM_SECTION_MAX_UTF8_BYTES = 3_800;
-export const SIM_MAX_INJECTED_SECTIONS = 6;
+/** Seven rule sections plus the SIM guide: room for a rules file of about 24 KB before its end is cut. */
+export const SIM_MAX_INJECTED_SECTIONS = 8;
 const SIM_INSTRUCTION_CACHE_MAX_ENTRIES = 512;
 
 // Claude Code loads ~/.claude/AGENTS.md itself; injecting it again would double every rule.
