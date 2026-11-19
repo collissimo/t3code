@@ -82,6 +82,23 @@ export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  /** The thread's instruction sections joined by blank lines; omitted when there are none. */
+  readonly threadInstructions?: string | undefined;
+}
+
+const T3_ACP_THREAD_INSTRUCTIONS_REPLACED =
+  "The following T3 thread instructions replace earlier T3 thread instructions:";
+const T3_ACP_THREAD_INSTRUCTIONS_REMOVED = "Earlier T3 thread instructions no longer apply.";
+
+// The ACP transcript is append-only, so a change or removal must say what it replaces.
+function t3AcpThreadInstructions(
+  current: string | undefined,
+  previous: string | undefined,
+): ReadonlyArray<string> {
+  if (!current) return previous ? [T3_ACP_THREAD_INSTRUCTIONS_REMOVED] : [];
+  return previous && previous !== current
+    ? [`${T3_ACP_THREAD_INSTRUCTIONS_REPLACED}\n${current}`]
+    : [current];
 }
 
 /** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
@@ -95,7 +112,9 @@ export function t3AcpPromptWithInstructions(input: {
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
     input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
-    input.previousState.hasDeviceTools === input.state.hasDeviceTools
+    input.previousState.hasDeviceTools === input.state.hasDeviceTools &&
+    (input.previousState.threadInstructions || undefined) ===
+      (input.state.threadInstructions || undefined)
   ) {
     return input.prompt;
   }
@@ -111,6 +130,10 @@ export function t3AcpPromptWithInstructions(input: {
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
         ]
       : []),
+    ...t3AcpThreadInstructions(
+      input.state.threadInstructions,
+      input.previousState?.threadInstructions,
+    ),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }

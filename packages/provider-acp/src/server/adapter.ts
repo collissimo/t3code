@@ -8550,10 +8550,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           sessionId: string,
         ) {
           const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+          const threadInstructions = (turnInput.threadInstructions ?? [])
+            .filter((section) => section.trim().length > 0)
+            .join("\n\n");
           const instructionState = {
             interactionMode: turnInput.runtimePolicy.interactionMode,
             hasT3Mcp: mcpSession !== undefined,
             hasDeviceTools: mcpSession?.capabilities?.has("device") === true,
+            ...(threadInstructions ? { threadInstructions } : {}),
           } satisfies T3AcpInstructionState;
           const userText =
             flavor.rewriteUserText === undefined

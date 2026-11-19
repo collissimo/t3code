@@ -4338,6 +4338,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         mcpAvailable
           ? "To wait for a background shell you started (tests, a build), call `t3_background_wait` with its shell ID before you end your turn. Do not mark work you leave running, or PRs."
           : undefined,
+        ...(turnInput.threadInstructions ?? []),
       ]
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n\n");

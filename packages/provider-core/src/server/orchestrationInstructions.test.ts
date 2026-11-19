@@ -83,3 +83,75 @@ describe("T3 device instructions", () => {
     assert.notInclude(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "## T3 Code devices");
   });
 });
+
+describe("ACP thread instructions", () => {
+  const base = { interactionMode: "default", hasT3Mcp: true, hasDeviceTools: false } as const;
+  const rules = "## Thread rules\n\nAlways run the focused tests.";
+
+  it("add nothing to the ACP prompt when a thread has no instructions", () => {
+    const plain = t3AcpPromptWithInstructions({ prompt: "Hi.", state: base });
+    assert.match(
+      plain,
+      /"clientRequestId":"\.\.\."\}'`\.\n<\/t3_code_instructions>\n\n<user_request>\nHi\.\n<\/user_request>$/,
+    );
+    assert.notInclude(plain, "T3 thread instructions");
+    for (const threadInstructions of [undefined, ""]) {
+      assert.equal(
+        t3AcpPromptWithInstructions({ prompt: "Hi.", state: { ...base, threadInstructions } }),
+        plain,
+      );
+      assert.equal(
+        t3AcpPromptWithInstructions({
+          prompt: "Hi.",
+          state: { ...base, threadInstructions },
+          previousState: base,
+        }),
+        "Hi.",
+      );
+    }
+  });
+
+  it("deliver once, then again only when they change or are removed", () => {
+    const state = { ...base, threadInstructions: rules };
+    const first = t3AcpPromptWithInstructions({ prompt: "Go.", state });
+    assert.include(first, `\n\n${rules}\n</t3_code_instructions>`);
+    assert.notInclude(first, "replace earlier");
+
+    assert.equal(
+      t3AcpPromptWithInstructions({ prompt: "Again.", state, previousState: state }),
+      "Again.",
+    );
+
+    const changed = t3AcpPromptWithInstructions({
+      prompt: "Next.",
+      state: { ...base, threadInstructions: "## Thread rules\n\nNew rule." },
+      previousState: state,
+    });
+    assert.include(
+      changed,
+      "The following T3 thread instructions replace earlier T3 thread instructions:\n## Thread rules\n\nNew rule.\n</t3_code_instructions>",
+    );
+
+    const removed = t3AcpPromptWithInstructions({
+      prompt: "Done.",
+      state: base,
+      previousState: state,
+    });
+    assert.include(
+      removed,
+      "Earlier T3 thread instructions no longer apply.\n</t3_code_instructions>",
+    );
+    assert.notInclude(removed, rules);
+  });
+
+  it("resend unchanged thread instructions without a replacement notice when the mode changes", () => {
+    const state = { ...base, threadInstructions: rules };
+    const planned = t3AcpPromptWithInstructions({
+      prompt: "Plan.",
+      state: { ...state, interactionMode: "plan" },
+      previousState: state,
+    });
+    assert.include(planned, rules);
+    assert.notInclude(planned, "replace earlier");
+  });
+});

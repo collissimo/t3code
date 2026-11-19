@@ -110,7 +110,7 @@ check.
 - Do not delete upstream code or workflows just because the fork does not use them; each deletion
   conflicts on sync when upstream edits that file.
 - `agentContextBudget.json` stays equal to upstream's. `AgentContextBudget.test.ts` leaves fork-only
-  MCP tools out of its measurement, so add new ones to its filter.
+  MCP tools out of its measurement (`script` and the SIM tools today), so add new ones to its filter.
 
 ## Fork features
 
@@ -190,8 +190,8 @@ are listed under Lineage in the thread details.
   server would drop.
 - Orchestrator threads are the server setting `orchestratorThreads` (thread IDs), again so the fork
   adds no database migration. The server reads it per turn: the thread gets the instructions in
-  `orchestratorModeInstructions.ts` (Claude: system prompt; Codex: additional context; other
-  providers get none yet) and its `delegate_task` calls default to the worker model, also on a
+  `orchestratorModeInstructions.ts` (Claude: system prompt; Codex: additional context; ACP and
+  OpenCode: thread instructions; other providers get none yet) and its `delegate_task` calls default to the worker model, also on a
   linked environment.
 - The instructions are measured by neither `agentContextBudget.json` nor the `mcp-tool-use` eval:
   both build the text for an ordinary thread, which is unchanged.
@@ -201,3 +201,51 @@ Code: `packages/shared/src/orchestratorMode.ts`,
 `apps/web/src/lib/orchestratorMode.ts`, `apps/web/src/components/orchestrator/`,
 `withWorkerModel` in
 `apps/server/src/mcp/OrchestratorMcpService.ts`.
+
+### Self-Improvement Memory (SIM)
+
+Agents keep one shared record of the changes they make to their own harness (`AGENTS.md`,
+`CLAUDE.md`, notes, hooks): what each change was meant to fix, what it predicted, and whether it
+worked. It is a native, cross-provider port of the self-improvement memory from Yu et al. 2026
+([arXiv:2611.18856](https://arxiv.org/abs/2611.18856)) and of the standalone
+`~/.claude/sim/sim.mjs`. Both use the same files in `~/.claude/sim/`, so the CLI and T3 Code see
+one record: `sim.jsonl` (the hash-chained journal, format v2, the source of truth), `sim.json`
+(rebuilt from the journal), `telemetry.jsonl` (the signals below) and `t3-epochs.json` (context
+epochs per thread). Nothing lives in SQLite, so the fork adds no database migration.
+
+- Settings are the server setting `sim`: `enabled`, `simDir` and `harnessDir` (default
+  `~/.claude/sim` and `~/.claude`), `injectRules`, `ruleFiles`, `providerOverrides` (on or off per
+  provider) and `advisorModelSelection`. The advisor defaults to `claudeAgent` /
+  `claude-fable-5-2`; any available model works (for example `antigravity` / `gemini-4-argon`),
+  and `null` turns it off. It never runs by itself: SIM only suggests a `delegate_task` with
+  `role: "design"` for the hard cases, such as an attempt that keeps failing or rules that
+  conflict across models or harnesses.
+- The MCP tools `sim_read`, `sim_write` and `sim_apply_harness_change` work in every provider. The
+  server takes the caller from `McpInvocationContext`, never from tool arguments, and refuses a
+  write or harness edit until the same thread has read `index` or `by_file` (plus the relevant
+  entries) in its current context epoch. `sim_apply_harness_change` edits one harness file inside
+  the configured `harnessDir` (following existing dotfiles symlinks in place while preserving file
+  modes) or the thread's workspace and records the attempt in one step; live edits require a
+  `full-access` thread in `default` mode, while `dryRun` previews the diff in any mode. No
+  self-grading: on the MCP path, a `fixed` result from the attempt's own thread, its native
+  subagents, or its forks and side chats stays `not confirmed`. Only an independent `delegate_task`
+  grader or a later session settles a prediction. (A fork calling standalone `sim.mjs observe`
+  directly from a shell cannot be blocked by the unmodified CLI, so `sim_read` with `action:
+  "audit"` flags standing `fixed` observations whose author shares fork/side-chat lineage.)
+- Codex, ACP (Antigravity) and OpenCode get the universal rules, filtered by harness, model and
+  project, plus a short guide to the SIM tools, as thread instructions. The text is frozen in memory
+  per context epoch, so prompt caches stay warm, and split under Codex's 4,000-byte limit per entry.
+  Claude Code reads `~/.claude/AGENTS.md` itself, so T3 injects no SIM sections into Claude turns.
+  ACP passes `threadInstructions` through for this, which also gives ACP threads orchestrator mode.
+- `SimObserverReactor` watches every thread while the server runs. A compaction, a context
+  handoff or a new provider conversation (`/clear`, fresh context, or provider switch, tracked in
+  `t3-epochs.json` across server restarts) starts a new context epoch, so the agent must read
+  again before it writes. It logs to `telemetry.jsonl`: harness edits that ended a turn without a
+  recorded attempt (also through `full-access` file edits and shell redirects in any provider),
+  direct edits of the SIM record files, checkpoint rollbacks, model switches after the first turn,
+  runs a person stopped and followed up, completed review tasks, and models seen for the first
+  time. `SimAuditService` reads it back for the audit.
+
+Code: `apps/server/src/sim/`, `apps/server/src/mcp/toolkits/sim/`,
+`packages/contracts/src/settings.ts` (`sim`),
+`packages/provider-core/src/server/orchestrationInstructions.ts` (ACP thread instructions).
