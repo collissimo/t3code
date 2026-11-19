@@ -65,6 +65,8 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     userId?: string;
     userInfoAt?: number;
     missingToken?: boolean;
+    /** Writes the token file of agy 1.5+ instead of the legacy `acp_token.json`. */
+    agyToken?: boolean;
     authMethod?: "oauth-personal" | "oauth-business" | "gemini-api-key";
   } = {},
 ) {
@@ -83,7 +85,15 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
         project_id: "project-id",
       }),
     );
-  if (!options.missingToken) yield* writeToken(options.refreshToken ?? "refresh-a");
+  if (options.agyToken) {
+    yield* fs.writeFileString(
+      path.join(profileDirectory, "antigravity-acp", "antigravity-oauth-token"),
+      JSON.stringify({
+        token: { access_token: "stale", refresh_token: options.refreshToken ?? "refresh-agy" },
+        auth_method: "consumer",
+      }),
+    );
+  } else if (!options.missingToken) yield* writeToken(options.refreshToken ?? "refresh-a");
   const requests: Array<{ url: string; body: string }> = [];
   const http = HttpClient.make((request, url, _signal, fiber) =>
     Effect.sync(() => {
@@ -111,7 +121,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
             : Response.json({}, { status: 403 }),
         );
       }
-      expect(JSON.parse(body)).toEqual({ project: "project-id" });
+      expect(JSON.parse(body)).toEqual(options.agyToken ? {} : { project: "project-id" });
       expect(request.headers["user-agent"]).toMatch(/^antigravity\/hub\/2\.24\.0 /);
       return HttpClientResponse.fromWeb(
         request,
@@ -137,6 +147,22 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
 });
 
 describe("Antigravity subscription limits", () => {
+  // Regression: agy 1.5 writes `antigravity-oauth-token` without client credentials, and the
+  // probe reported "Sign in with Google" for a signed-in account.
+  it.effect("reads limits from the agy 1.5 token file with agy's OAuth client", () =>
+    Effect.gen(function* () {
+      const { probe, requests } = yield* fixture({ agyToken: true });
+      const limits = yield* probe;
+      expect(limits.unavailable).toBeUndefined();
+      expect(limits.windows.map((window) => window.id)).toContain("gemini-5h");
+      const refresh = new URLSearchParams(
+        requests.find((request) => request.url.endsWith("/token"))?.body,
+      );
+      expect(refresh.get("refresh_token")).toBe("refresh-agy");
+      expect(refresh.get("client_id")).toMatch(/^1071006060591-/);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
   // Oracle: the 10:16 UTC payload and its narrow Workaround rule.
   it.effect("omits rolling resets for untouched summary buckets and keeps used Gemini resets", () =>
     Effect.gen(function* () {
