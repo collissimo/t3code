@@ -409,6 +409,7 @@ export function applyServerSettingsPatch(
     usageModelAliases: usageModelAliasesPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
+    sim: simPatch,
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
     projectAutoPullOverrides: _legacyAutoPull,
     projectScriptOverrides: _legacyScripts,
@@ -611,6 +612,24 @@ export function applyServerSettingsPatch(
       : {}),
     ...(patch.defaultProjectScripts !== undefined
       ? { defaultProjectScripts: patch.defaultProjectScripts }
+      : {}),
+    ...(simPatch !== undefined
+      ? {
+          sim: {
+            ...current.sim,
+            ...(simPatch.enabled !== undefined ? { enabled: simPatch.enabled } : {}),
+            ...(simPatch.simDir !== undefined ? { simDir: simPatch.simDir } : {}),
+            ...(simPatch.harnessDir !== undefined ? { harnessDir: simPatch.harnessDir } : {}),
+            ...(simPatch.injectRules !== undefined ? { injectRules: simPatch.injectRules } : {}),
+            ...(simPatch.ruleFiles !== undefined ? { ruleFiles: simPatch.ruleFiles } : {}),
+            ...(simPatch.providerOverrides !== undefined
+              ? { providerOverrides: simPatch.providerOverrides }
+              : {}),
+            ...(simPatch.advisorModelSelection !== undefined
+              ? { advisorModelSelection: simPatch.advisorModelSelection }
+              : {}),
+          },
+        }
       : {}),
     ...(usageLimitSourcesPatch !== undefined
       ? {

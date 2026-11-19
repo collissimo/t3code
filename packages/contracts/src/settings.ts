@@ -1493,6 +1493,43 @@ export const ServerSettings = Schema.Struct({
   orchestratorThreadWorkerEfforts: Schema.Array(OrchestratorThreadWorkerEffort).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** Self-improvement memory (SIM) cross-harness configuration (fork feature). */
+  sim: Schema.Struct({
+    enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+    simDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+    harnessDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+    injectRules: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+    ruleFiles: Schema.Array(TrimmedNonEmptyString).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+    providerOverrides: Schema.Record(TrimmedNonEmptyString, Schema.Boolean).pipe(
+      Schema.withDecodingDefault(Effect.succeed({})),
+    ),
+    /** Optional on-demand advisor model for tricky SIM escalations; null disables advisor hints. */
+    advisorModelSelection: Schema.NullOr(ModelSelection).pipe(
+      Schema.withDecodingDefault(
+        Effect.succeed({
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-fable-5-2",
+        }),
+      ),
+    ),
+  }).pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        enabled: true,
+        simDir: "",
+        harnessDir: "",
+        injectRules: true,
+        ruleFiles: [],
+        providerOverrides: {},
+        advisorModelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-fable-5-2",
+        },
+      }),
+    ),
+  ),
   snoozePresets: SnoozePresetSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
   ),
@@ -1951,6 +1988,17 @@ export const ServerSettingsPatch = Schema.Struct({
   orchestratorEffort: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   orchestratorWorkerEffort: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   orchestratorThreadWorkerEfforts: Schema.optionalKey(Schema.Array(OrchestratorThreadWorkerEffort)),
+  sim: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      simDir: Schema.optionalKey(TrimmedString),
+      harnessDir: Schema.optionalKey(TrimmedString),
+      injectRules: Schema.optionalKey(Schema.Boolean),
+      ruleFiles: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+      providerOverrides: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, Schema.Boolean)),
+      advisorModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+    }),
+  ),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),

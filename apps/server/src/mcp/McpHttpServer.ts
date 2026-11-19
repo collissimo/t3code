@@ -90,6 +90,8 @@ import {
 import * as ScriptRunner from "../script/ScriptRunner.ts";
 import * as ScriptHandlers from "./toolkits/script/handlers.ts";
 import { ScriptToolkit } from "./toolkits/script/tools.ts";
+import * as SimHandlers from "./toolkits/sim/handlers.ts";
+import { SimToolkit } from "./toolkits/sim/tools.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { MessageToolkit } from "./toolkits/message/tools.ts";
 import * as MessageHandlers from "./toolkits/message/handlers.ts";
@@ -1343,6 +1345,8 @@ export const layerScriptToolkit = toolkitRegistration(ScriptToolkit, ScriptHandl
   Layer.provide(McpServer.McpServer.layer),
 );
 
+export const layerSimToolkit = toolkitRegistration(SimToolkit, SimHandlers.layer);
+
 export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentToolkit,
   AttachmentHandlers.layer,
@@ -1415,6 +1419,7 @@ export const layerTools = Layer.mergeAll(
   layerDeviceToolkit,
   layerHtmlToolkit,
   layerScriptToolkit,
+  layerSimToolkit,
   layerMessageToolkit,
 );
 

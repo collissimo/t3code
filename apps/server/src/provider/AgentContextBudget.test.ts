@@ -16,6 +16,8 @@ import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { SCRIPT_TOOL_NAME } from "../mcp/toolkits/script/tools.ts";
+import { SIM_TOOL_NAMES } from "../mcp/toolkits/sim/tools.ts";
+import { SimAuditService, SimService } from "../sim/SimContracts.ts";
 import {
   CLAUDE_PROVIDER,
   makeClaudeQueryOptions,
@@ -83,6 +85,8 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(ServerEnvironment)({}),
   Layer.mock(ServerSecretStore)({}),
   Layer.mock(ServerSettingsService)({}),
+  Layer.mock(SimAuditService)({}),
+  Layer.mock(SimService)({}),
   Layer.mock(SourceControlRepositoryService)({}),
   Layer.mock(ThreadIssueService)({}),
   Layer.mock(ThreadLaunchService)({}),
@@ -147,9 +151,9 @@ it.effect("agent context matches the committed budget", () =>
       // The model sees these fields. outputSchema and annotations are protocol metadata.
       mcpToolListJsonBytes: utf8Bytes(
         JSON.stringify(
-          // Fork-only tool: left out so the budget file stays equal to upstream's and never conflicts.
+          // Fork-only tools: left out so the budget file stays equal to upstream's and never conflicts.
           mcp.tools
-            .filter(({ tool }) => tool.name !== SCRIPT_TOOL_NAME)
+            .filter(({ tool }) => tool.name !== SCRIPT_TOOL_NAME && !SIM_TOOL_NAMES.has(tool.name))
             .map(({ tool }) => ({
               name: tool.name,
               description: tool.description,

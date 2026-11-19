@@ -60,10 +60,13 @@ import {
   makeProviderFailure,
   makeProviderFailureTurnItem,
 } from "@t3tools/provider-core/server/failure";
+import * as ProjectStore from "./ProjectStore.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import { userFacingDatabaseErrorMessage } from "./UserFacingErrors.ts";
+import { SimService } from "../sim/SimContracts.ts";
+import { createSimInstructionCache, resolveSimThreadInstructions } from "../sim/SimInstructions.ts";
 
 export interface ProviderEventRoutingState {
   readonly ownedThreadIds: ReadonlySet<ThreadId>;
@@ -723,6 +726,9 @@ export const layer: Layer.Layer<
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
     const turnAnalytics = yield* ProviderUsageAnalytics.ProviderTurnAnalytics;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+    const simService = yield* Effect.serviceOption(SimService);
+    const projectStore = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
+    const simInstructionCache = createSimInstructionCache();
 
     const writeFinalRunEvents = Effect.fn("RunExecutionService.writeFinalRunEvents")(
       function* (input: {
@@ -2210,15 +2216,30 @@ export const layer: Layer.Layer<
           input.run.threadId,
         );
         const threadInstructions = yield* serverSettings.getSettings.pipe(
-          Effect.map((settings) =>
-            isOrchestratorThread(settings, input.appThread.id)
-              ? orchestratorModeInstructions({
-                  workerModel: orchestratorWorkerModelSelection(settings, input.appThread)?.model,
-                })
-              : undefined,
+          Effect.flatMap((settings) =>
+            Effect.gen(function* () {
+              const orchestrator = isOrchestratorThread(settings, input.appThread.id)
+                ? orchestratorModeInstructions({
+                    workerModel: orchestratorWorkerModelSelection(settings, input.appThread)?.model,
+                  })
+                : [];
+              const simSections = yield* resolveSimThreadInstructions({
+                cache: simInstructionCache,
+                simService,
+                projectStore,
+                settings: settings.sim,
+                threadId: input.appThread.id,
+                projectId: input.appThread.projectId,
+                providerInstanceId: input.modelSelection.instanceId,
+                driver: input.providerThread.driver ?? input.session.driver,
+                model: input.modelSelection.model,
+              });
+              const combined = [...orchestrator, ...simSections];
+              return combined.length === 0 ? undefined : combined;
+            }),
           ),
           Effect.catch((cause) =>
-            Effect.logWarning("Failed to read orchestrator mode settings.", { cause }).pipe(
+            Effect.logWarning("Failed to read thread instruction settings.", { cause }).pipe(
               Effect.as(undefined),
             ),
           ),
