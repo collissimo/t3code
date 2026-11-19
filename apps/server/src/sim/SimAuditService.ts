@@ -18,10 +18,12 @@ import {
   type SimAuditOptions,
   type SimAuditReport,
   type SimCallerContext,
+  type SimMetricEvent,
   type SimResolvedPaths,
   type SimState,
   type SimTelemetryEvent,
 } from "./SimContracts.ts";
+import { summarizeMetricsMatrix, summarizeRuleRoi } from "./SimMetricsStore.ts";
 import { detectShellWriteTargets } from "./SimObserverReactor.ts";
 import * as SimStore from "./SimStore.ts";
 
@@ -105,6 +107,7 @@ function extractUserText(content: unknown): string {
     .replace(/<assistant_citations>[\s\S]*?<\/assistant_citations>/g, "")
     .replace(/<system_context>[\s\S]*?<\/system_context>/g, "")
     .replace(/<runtime_info>[\s\S]*?<\/runtime_info>/g, "")
+    .replace(/<sim_turn_nudge>[\s\S]*?<\/sim_turn_nudge>/g, "")
     .trim();
   const userRequest = text.match(/<user_request>([\s\S]*?)<\/user_request>/);
   if (userRequest) text = (userRequest[1] ?? "").trim();
@@ -172,6 +175,7 @@ interface HarnessEdit {
   readonly files: ReadonlyArray<string>;
   readonly record: boolean;
   readonly recorded: boolean;
+  readonly verifiedByHash?: boolean | undefined;
 }
 
 interface FlaggedSession {
@@ -708,6 +712,7 @@ const make = Effect.gen(function* () {
     const telemetry = (yield* sim.readTelemetry(sinceMs)).filter(
       (event) => !caller.threadId || !("threadId" in event) || event.threadId !== caller.threadId,
     );
+    const metrics = typeof sim.readMetrics === "function" ? yield* sim.readMetrics(sinceMs) : [];
     const observed = yield* sim.getObservedModels();
     return yield* Effect.try({
       try: () =>
@@ -722,6 +727,8 @@ const make = Effect.gen(function* () {
           limit,
           db,
           telemetry,
+          metrics,
+          priceOverrides: settings.usagePriceOverrides,
           observed,
           advisor: settings.sim,
         }),
@@ -841,6 +848,10 @@ interface ReportInput {
     readonly forkParents: ReadonlyMap<string, string | null>;
   };
   readonly telemetry: ReadonlyArray<SimTelemetryEvent>;
+  readonly metrics: ReadonlyArray<SimMetricEvent>;
+  readonly priceOverrides?:
+    | Readonly<Record<string, import("@t3tools/contracts").UsageModelPriceOverride>>
+    | undefined;
   readonly observed: ReadonlySet<string>;
   readonly advisor: Parameters<typeof SimStore.buildAdvisorEscalation>[1];
 }
@@ -894,6 +905,8 @@ function buildReport(input: ReportInput): SimAuditReport {
   const interrupts = new Map<string, Interrupt>();
   const reviews = new Map<string, Review>();
   const freshModels = new Map<string, { providerInstanceId: string; model: string }>();
+  const jevCorrections: Array<Extract<SimTelemetryEvent, { kind: "jev_correction_signal" }>> = [];
+  const turnEndings: Array<Extract<SimTelemetryEvent, { kind: "turn_ending_classified" }>> = [];
   let threadsScanned = 0;
   let excludedSelf = 0;
 
@@ -1061,6 +1074,8 @@ function buildReport(input: ReportInput): SimAuditReport {
       case "unrecorded_harness_edit":
       case "direct_sim_record_edit": {
         const isRecord = event.kind === "direct_sim_record_edit";
+        const verifiedByHash =
+          event.kind === "unrecorded_harness_edit" ? event.verifiedByHash : undefined;
         const known = edits.some(
           (edit) =>
             edit.session === event.threadId &&
@@ -1077,6 +1092,7 @@ function buildReport(input: ReportInput): SimAuditReport {
             files: event.files,
             record: isRecord,
             recorded: false,
+            ...(verifiedByHash ? { verifiedByHash: true } : {}),
           });
         }
         break;
@@ -1123,6 +1139,14 @@ function buildReport(input: ReportInput): SimAuditReport {
         }
         break;
       }
+      case "jev_correction_signal":
+        if (event.flagged) jevCorrections.push(event);
+        break;
+      case "turn_ending_classified":
+        if (event.label !== "finished") turnEndings.push(event);
+        break;
+      case "detector_evaluated":
+        break;
     }
   }
 
@@ -1305,8 +1329,13 @@ function buildReport(input: ReportInput): SimAuditReport {
   out.push(`== 3. Harness Edits (${harnessEdits.length}) ==`);
   if (!harnessEdits.length) out.push("  none");
   for (const edit of harnessEdits) {
+    const tag = edit.recorded
+      ? "recorded"
+      : edit.verifiedByHash
+        ? "UNRECORDED [hash-verified]"
+        : "UNRECORDED?";
     out.push(
-      `  ${edit.date} ${edit.source} ${edit.session} [${edit.provider}/${edit.model}] ${edit.recorded ? "recorded" : "UNRECORDED?"}: ${edit.files.join(", ")}`,
+      `  ${edit.date} ${edit.source} ${edit.session} [${edit.provider}/${edit.model}] ${tag}: ${edit.files.join(", ")}`,
     );
   }
   for (const edit of recordEdits) {
@@ -1365,6 +1394,37 @@ function buildReport(input: ReportInput): SimAuditReport {
     for (const candidate of advisorEscalation.candidates)
       out.push(`  ${candidate.kind}: ${candidate.summary}`);
     out.push(`  ${advisorEscalation.guidance}`);
+  }
+  const metricsMatrix = summarizeMetricsMatrix(input.metrics);
+  const roiSummary = summarizeRuleRoi(input.metrics, { priceOverrides: input.priceOverrides });
+  if (metricsMatrix.length > 0 || roiSummary.rows.length > 0) {
+    out.push("");
+    out.push("== 9. Opportunity Matrix & Rule Tax (Token-ROI) ==");
+    out.push(
+      `Opportunities: ${roiSummary.totalOpportunities} | Violations: ${roiSummary.totalViolations} | Injected: ${roiSummary.totalTokensInjected.toLocaleString("en-US")} tokens (~$${roiSummary.totalEstimatedCostUsd.toFixed(4)})`,
+    );
+    for (const row of roiSummary.rows.slice(0, 12)) {
+      const rate = row.complianceRate === null ? "n/a" : `${Math.round(row.complianceRate * 100)}%`;
+      out.push(
+        `  ${row.ruleKey} (${row.problemId ?? "-"}) opps=${row.opportunities} pass=${row.passed} viol=${row.violated} rate=${rate} tokens=${row.tokensInjected} [${row.recommendation}]`,
+      );
+    }
+  }
+  if (jevCorrections.length > 0 || turnEndings.length > 0) {
+    out.push("");
+    out.push(
+      `== 10. Jev Semantic Signals (corrections=${jevCorrections.length}, non-finished endings=${turnEndings.length}) ==`,
+    );
+    for (const signal of jevCorrections.slice(0, limit)) {
+      out.push(
+        `  JEV-CORRECTION ${signal.ts.slice(0, 10)} ${signal.threadId} [${signal.providerInstanceId ?? "?"}/${signal.model ?? "?"}]: "${squashText(signal.excerpt ?? "", 180)}"`,
+      );
+    }
+    for (const ending of turnEndings.slice(0, limit)) {
+      out.push(
+        `  TURN-END ${ending.ts.slice(0, 10)} ${ending.threadId} [${ending.providerInstanceId ?? "?"}/${ending.model ?? "?"}] ${ending.label} (wait=${ending.waitingForUser.toFixed(2)}, manual=${ending.manualHandoff.toFixed(2)}, unverified=${ending.unverifiedDoneClaim.toFixed(2)})`,
+      );
+    }
   }
 
   return {

@@ -14,6 +14,7 @@ import {
   type SimResolvedPaths,
   type SimSettingsConfig,
 } from "./SimContracts.ts";
+import * as SimMetricsStore from "./SimMetricsStore.ts";
 import * as SimStore from "./SimStore.ts";
 
 const RECENT_RUNS_LIMIT = 256;
@@ -101,19 +102,45 @@ const make = Effect.gen(function* () {
 
   return SimService.of({
     read: Effect.fn("SimService.read")(function* (caller, request) {
-      const sim = yield* enabledSettings;
+      const fullSettings = yield* serverSettings.getSettings.pipe(Effect.mapError(toSimError));
+      const sim = fullSettings.sim;
+      if (!sim.enabled) {
+        return yield* new SimServiceError({
+          code: "disabled",
+          problems: ["SIM is turned off in settings"],
+        });
+      }
       const paths = pathsOf(sim);
       const loaded = yield* loadForRead(paths);
+      const nowMs = yield* Clock.currentTimeMillis;
       const telemetry =
         request.action === "review"
           ? SimStore.readTelemetry(
               paths,
-              SimStore.readAuditWatermarkMs(paths) ??
-                (yield* Clock.currentTimeMillis) - REVIEW_TELEMETRY_DEFAULT_WINDOW_MS,
+              SimStore.readAuditWatermarkMs(paths) ?? nowMs - REVIEW_TELEMETRY_DEFAULT_WINDOW_MS,
             )
           : [];
+      const metricsSinceMs =
+        request.days !== undefined && request.days > 0
+          ? nowMs - request.days * 86_400_000
+          : undefined;
+      const metrics =
+        request.action === "metrics" || request.action === "roi"
+          ? SimMetricsStore.readMetrics(paths, metricsSinceMs)
+          : undefined;
       return yield* attempt(() =>
-        SimStore.runRead({ paths, loaded, caller, settings: sim, telemetry }, request),
+        SimStore.runRead(
+          {
+            paths,
+            loaded,
+            caller,
+            settings: sim,
+            telemetry,
+            metrics,
+            priceOverrides: fullSettings.usagePriceOverrides,
+          },
+          request,
+        ),
       );
     }),
 
@@ -191,6 +218,26 @@ const make = Effect.gen(function* () {
       function* (sinceMs) {
         const paths = pathsOf(yield* simSettings);
         return SimStore.readTelemetry(paths, sinceMs);
+      },
+      Effect.orElseSucceed(() => []),
+    ),
+
+    recordMetrics: Effect.fn("SimService.recordMetrics")(
+      function* (events) {
+        if (events.length === 0) return;
+        const sim = yield* simSettings;
+        if (!sim.enabled) return;
+        yield* writes.withPermits(1)(
+          attempt(() => SimMetricsStore.appendMetrics(pathsOf(sim), events)),
+        );
+      },
+      Effect.catchCause((cause) => Effect.logWarning("SIM metrics write failed", cause)),
+    ),
+
+    readMetrics: Effect.fn("SimService.readMetrics")(
+      function* (sinceMs) {
+        const paths = pathsOf(yield* simSettings);
+        return SimMetricsStore.readMetrics(paths, sinceMs);
       },
       Effect.orElseSucceed(() => []),
     ),

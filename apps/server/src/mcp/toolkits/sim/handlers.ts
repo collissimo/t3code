@@ -414,6 +414,8 @@ export const layer = McpToolAccess.toLayer(
               policy: params.policy,
               harness: params.harness,
               page: params.page,
+              days: params.days,
+              maxTokens: params.maxTokens,
             })
             .pipe(Effect.mapError(simFailure));
           return definedOnly({

@@ -124,7 +124,7 @@ export const invalidateSettingsSecrets = Effect.fn("SettingsSecrets.invalidate")
       | "easDeviceHosts"
       | "simlockDeviceHosts"
       | "cloudSpeechCredentials"
-    >,
+    > & { readonly sim?: ServerSettings["sim"] | undefined },
     E
   >,
 ) {
@@ -137,6 +137,9 @@ export const invalidateSettingsSecrets = Effect.fn("SettingsSecrets.invalidate")
       ),
       ...collectDeviceHostSecretReferences(current),
       ...Object.values(current.cloudSpeechCredentials).filter(isSecretReference),
+      ...(current.sim?.jev.apiKey !== undefined && isSecretReference(current.sim.jev.apiKey)
+        ? [current.sim.jev.apiKey]
+        : []),
     ]),
     Effect.orElseSucceed(() => undefined),
   );

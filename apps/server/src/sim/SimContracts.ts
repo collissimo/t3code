@@ -227,6 +227,8 @@ export interface SimResolvedPaths {
   readonly seenDir: string;
   readonly epochsPath: string;
   readonly telemetryPath: string;
+  readonly metricsPath: string;
+  readonly jevUsagePath: string;
   readonly auditStatePath: string;
 }
 
@@ -264,6 +266,8 @@ export function resolveSimPaths(
     seenDir: NodePath.join(simDir, "seen"),
     epochsPath: NodePath.join(simDir, "t3-epochs.json"),
     telemetryPath: NodePath.join(simDir, "telemetry.jsonl"),
+    metricsPath: NodePath.join(simDir, "metrics.jsonl"),
+    jevUsagePath: NodePath.join(simDir, "jev-usage.json"),
     auditStatePath: NodePath.join(harnessDir, "state", "sim-audit-state.json"),
   };
 }
@@ -342,6 +346,8 @@ const RECORD_FILES = new Set([
   "sim.jsonl",
   "sim.lock",
   "telemetry.jsonl",
+  "metrics.jsonl",
+  "jev-usage.json",
   "t3-epochs.json",
 ]);
 
@@ -464,6 +470,7 @@ export type SimTelemetryEvent =
       readonly providerInstanceId?: string | undefined;
       readonly model?: string | undefined;
       readonly files: ReadonlyArray<string>;
+      readonly verifiedByHash?: boolean | undefined;
     }
   | {
       readonly ts: string;
@@ -518,10 +525,94 @@ export type SimTelemetryEvent =
       readonly model?: string | undefined;
       readonly title?: string | undefined;
       readonly excerpt?: string | undefined;
+    }
+  | {
+      readonly ts: string;
+      readonly kind: "detector_evaluated";
+      readonly threadId: string;
+      readonly runId?: string | undefined;
+      readonly providerInstanceId?: string | undefined;
+      readonly model?: string | undefined;
+      readonly project?: string | undefined;
+      readonly detectorId: string;
+      readonly problemId?: string | undefined;
+      readonly attemptId?: string | undefined;
+      readonly verdict: "passed" | "violated" | "uncertain" | "misfired";
+      readonly source: "deterministic" | "jev" | "replay";
+      readonly confidence?: number | undefined;
+      readonly evidence?: string | undefined;
+    }
+  | {
+      readonly ts: string;
+      readonly kind: "jev_correction_signal";
+      readonly threadId: string;
+      readonly runId?: string | undefined;
+      readonly providerInstanceId?: string | undefined;
+      readonly model?: string | undefined;
+      readonly project?: string | undefined;
+      readonly scores: Readonly<Record<string, number>>;
+      readonly flagged: boolean;
+      readonly excerpt?: string | undefined;
+    }
+  | {
+      readonly ts: string;
+      readonly kind: "turn_ending_classified";
+      readonly threadId: string;
+      readonly runId?: string | undefined;
+      readonly providerInstanceId?: string | undefined;
+      readonly model?: string | undefined;
+      readonly project?: string | undefined;
+      readonly waitingForUser: number;
+      readonly manualHandoff: number;
+      readonly unverifiedDoneClaim: number;
+      readonly label: "finished" | "waiting_for_user" | "manual_handoff" | "unverified_done";
+    };
+
+export type SimMetricEvent =
+  | {
+      readonly ts: string;
+      readonly kind: "observation";
+      readonly detectorId: string;
+      readonly ruleKey: string;
+      readonly problemId?: string | undefined;
+      readonly attemptId?: string | undefined;
+      readonly verdict: "passed" | "violated" | "uncertain" | "misfired";
+      readonly source: "deterministic" | "jev" | "replay";
+      readonly confidence?: number | undefined;
+      readonly providerInstanceId: string;
+      readonly model: string;
+      readonly project?: string | undefined;
+      readonly threadId?: string | undefined;
+      readonly runId?: string | undefined;
+      readonly evidence?: string | undefined;
+    }
+  | {
+      readonly ts: string;
+      readonly kind: "injection";
+      readonly ruleKey: string;
+      readonly problemId?: string | undefined;
+      readonly attemptId?: string | undefined;
+      readonly delivery: "base" | "jit" | "candidate";
+      readonly bytes: number;
+      readonly estimatedTokens: number;
+      readonly providerInstanceId: string;
+      readonly model: string;
+      readonly project?: string | undefined;
+      readonly threadId?: string | undefined;
     };
 
 export interface SimReadRequest {
-  readonly action: "index" | "show" | "brief_all" | "find" | "by_file" | "check" | "review";
+  readonly action:
+    | "index"
+    | "show"
+    | "brief_all"
+    | "brief"
+    | "find"
+    | "by_file"
+    | "check"
+    | "review"
+    | "metrics"
+    | "roi";
   readonly ids?: ReadonlyArray<string> | undefined;
   readonly brief?: boolean | undefined;
   readonly query?: string | undefined;
@@ -529,6 +620,8 @@ export interface SimReadRequest {
   readonly policy?: string | undefined;
   readonly harness?: string | undefined;
   readonly page?: number | undefined;
+  readonly days?: number | undefined;
+  readonly maxTokens?: number | undefined;
 }
 
 export interface SimReadResult {
@@ -707,6 +800,8 @@ export class SimService extends Context.Service<
     readonly getThreadSeenEpoch: (threadId: ThreadId) => Effect.Effect<number>;
     readonly recordTelemetry: (event: SimTelemetryEvent) => Effect.Effect<void>;
     readonly readTelemetry: (sinceMs?: number) => Effect.Effect<ReadonlyArray<SimTelemetryEvent>>;
+    readonly recordMetrics: (events: ReadonlyArray<SimMetricEvent>) => Effect.Effect<void>;
+    readonly readMetrics: (sinceMs?: number) => Effect.Effect<ReadonlyArray<SimMetricEvent>>;
     readonly recordRecentAttemptInTurn: (input: {
       readonly threadId: ThreadId;
       readonly runId?: RunId | undefined;

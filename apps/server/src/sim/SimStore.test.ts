@@ -770,4 +770,99 @@ describe("SimStore telemetry", () => {
     expect(kept[kept.length - 1]).toEqual(event(2_099));
     expect(SimStore.readTelemetry(sb.paths, Date.parse("2026-11-11T00:00:00Z"))).toEqual([]);
   });
+
+  it("renders compact brief with folded test counts and metrics/roi views", () => {
+    using sb = sandbox();
+    NodeFS.writeFileSync(
+      NodePath.join(sb.paths.harnessDir, "AGENTS.md"),
+      "- Require end-to-end command proof before reporting done.\n",
+      "utf8",
+    );
+    const author = { sessionId: "t3:author-brief", model: "claude-opus-5-5" };
+    const grader = { sessionId: "t3:grader-brief", model: "claude-opus-5-5" };
+    SimStore.runRead(
+      {
+        paths: sb.paths,
+        loaded: SimStore.loadReadOnly(sb.paths),
+        caller: author,
+        settings: { advisorModelSelection: null },
+        telemetry: [],
+      },
+      { action: "index" },
+    );
+    SimStore.runRead(
+      {
+        paths: sb.paths,
+        loaded: SimStore.loadReadOnly(sb.paths),
+        caller: author,
+        settings: { advisorModelSelection: null },
+        telemetry: [],
+      },
+      { action: "brief_all" },
+    );
+    SimStore.runWrite(sb.paths, author, {
+      action: "attempt",
+      input: {
+        new: "Repeated unverified claims",
+        action: "add",
+        what: "Require end-to-end command proof before reporting done",
+        why: "Agents called tasks done after edits alone",
+        files: ["~/.claude/AGENTS.md"],
+        anchor: "Require end-to-end command proof",
+        depends_on: ["model"],
+        predicted: ["unverified-done"],
+        expect: "Command output included",
+      },
+    });
+    for (let i = 0; i < 4; i += 1) {
+      SimStore.runWrite(sb.paths, grader, {
+        action: "observe",
+        input: {
+          attempt: "A1",
+          target: "unverified-done",
+          result: "fixed",
+          evidence: `Synthetic harness test pass ${i}`,
+          source: "test",
+        },
+      });
+    }
+    const brief = SimStore.runRead(
+      {
+        paths: sb.paths,
+        loaded: SimStore.loadReadOnly(sb.paths),
+        caller: grader,
+        settings: { advisorModelSelection: null },
+        telemetry: [],
+      },
+      { action: "brief", maxTokens: 500 },
+    );
+    expect(brief.text).toContain("tests(fixed:4)");
+    expect(brief.text).toContain("P1: Repeated unverified claims");
+
+    const roi = SimStore.runRead(
+      {
+        paths: sb.paths,
+        loaded: SimStore.loadReadOnly(sb.paths),
+        caller: grader,
+        settings: { advisorModelSelection: null },
+        telemetry: [],
+        metrics: [
+          {
+            ts: "2026-11-19T10:00:00.000Z",
+            kind: "injection",
+            ruleKey: "verified-commit-trailer",
+            problemId: "P44",
+            delivery: "base",
+            bytes: 120_000,
+            estimatedTokens: 30_000,
+            providerInstanceId: "claudeAgent",
+            model: "claude-opus-5-5",
+          },
+        ],
+      },
+      { action: "roi" },
+    );
+    expect(roi.text).toContain("demote_to_jit");
+    expect(roi.text).toContain("verified-commit-trailer");
+  });
 });

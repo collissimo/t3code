@@ -8,6 +8,8 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import type { UsageModelPriceOverride } from "@t3tools/contracts";
+
 import {
   SIM_DEFAULT_PAGE_CHARS,
   SIM_DEPENDS,
@@ -40,6 +42,7 @@ import {
   type SimJournalEvent,
   type SimJournalOp,
   type SimLinkKind,
+  type SimMetricEvent,
   type SimObservation,
   type SimObserveInput,
   type SimProblem,
@@ -52,6 +55,12 @@ import {
   type SimWriteRequest,
   type SimWriteResult,
 } from "./SimContracts.ts";
+import {
+  renderMetricsMatrixText,
+  renderRuleRoiText,
+  summarizeMetricsMatrix,
+  summarizeRuleRoi,
+} from "./SimMetricsStore.ts";
 
 type Data = Record<string, unknown>;
 
@@ -2471,6 +2480,53 @@ export interface SimReadContext {
   readonly caller: SimCallerContext;
   readonly settings: Pick<SimSettingsConfig, "advisorModelSelection">;
   readonly telemetry: ReadonlyArray<SimTelemetryEvent>;
+  readonly metrics?: ReadonlyArray<SimMetricEvent> | undefined;
+  readonly priceOverrides?: Readonly<Record<string, UsageModelPriceOverride>> | undefined;
+}
+
+function renderCompactProblemBrief(state: SimState, problem: SimProblem): string {
+  const lines = [`${problem.id}: ${problem.name}`];
+  const liveAttempts = problem.attempts.filter((attempt) => attempt.live);
+  const shownAttempts = liveAttempts.length > 0 ? liveAttempts : problem.attempts.slice(-2);
+  for (const attempt of shownAttempts) {
+    const activeObs = attempt.observations.filter((obs) => !obs.retracted);
+    const testObs = activeObs.filter((obs) => obs.source === "test");
+    const nonTestObs = activeObs.filter((obs) => obs.source !== "test");
+    const testCounts = new Map<string, number>();
+    for (const obs of testObs) {
+      testCounts.set(obs.result, (testCounts.get(obs.result) ?? 0) + 1);
+    }
+    const foldedTest =
+      testObs.length > 0
+        ? `tests(${[...testCounts.entries()].map(([k, v]) => `${k}:${v}`).join(",")})`
+        : "";
+    const realCounts = new Map<string, number>();
+    for (const obs of nonTestObs) {
+      realCounts.set(obs.result, (realCounts.get(obs.result) ?? 0) + 1);
+    }
+    const foldedReal =
+      nonTestObs.length > 0
+        ? `live(${[...realCounts.entries()].map(([k, v]) => `${k}:${v}`).join(",")})`
+        : "";
+    const obsSummary = [foldedReal, foldedTest].filter(Boolean).join(" ") || "untested";
+    const status = attempt.live ? "LIVE" : attempt.accepted ? "superseded" : "rejected";
+    lines.push(
+      `  ${attempt.id} [${status}, ${attempt.policy}, ${attempt.files.join(", ") || "no-file"}]: ${squash(attempt.what).slice(0, 180)} | ${obsSummary}${attempt.missed.length ? ` | missed: ${attempt.missed.join(",")}` : ""}${attempt.pending.length ? ` | open: ${attempt.pending.length}` : ""}`,
+    );
+  }
+  const hiddenCount = problem.attempts.length - shownAttempts.length;
+  if (hiddenCount > 0) {
+    lines.push(
+      `  (+${hiddenCount} earlier attempt(s); use action "show" with ids ["${problem.id}"] for full history)`,
+    );
+  }
+  if (problem.related.length > 0) {
+    const rel = problem.related
+      .map((entry) => `${entry.kind} ${entry.id}${findProblem(state, entry.id) ? "" : "?"}`)
+      .join(", ");
+    lines.push(`  links: ${rel}`);
+  }
+  return lines.join("\n");
 }
 
 export function runRead(context: SimReadContext, request: SimReadRequest): SimReadResult {
@@ -2589,6 +2645,62 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
           : null,
       });
       return { text };
+    }
+    case "brief": {
+      const maxTokens = Math.max(250, Math.min(request.maxTokens ?? 2_000, 8_000));
+      const maxChars = maxTokens * 4;
+      let selected: Array<SimProblem> = state.problems;
+      if (request.ids?.length) {
+        selected = [];
+        for (const raw of request.ids) {
+          const id = raw.trim();
+          const problem = id.startsWith("A")
+            ? findAttempt(state, id)?.problem
+            : findProblem(state, id);
+          if (problem && !selected.includes(problem)) selected.push(problem);
+        }
+      } else if (isText(request.file)) {
+        const canonical = resolveCallerFile(request.file, caller, paths);
+        selected = state.problems.filter((problem) =>
+          problem.attempts.some((attempt) => attempt.files.includes(canonical)),
+        );
+      } else if (isText(request.query)) {
+        selected = searchProblems(state, request.query);
+      }
+      if (selected.length === 0) {
+        return { text: "SIM compact brief: no matching entries." };
+      }
+      const chunks: Array<string> = [
+        ...head,
+        `SIM Compact Brief (${selected.length} root cause(s), budget <= ${maxTokens} tokens; test observations folded):`,
+      ];
+      let used = chunks.join("\n").length;
+      let omitted = 0;
+      for (const problem of selected) {
+        const block = renderCompactProblemBrief(state, problem);
+        if (used + block.length + 2 > maxChars) {
+          omitted += 1;
+          continue;
+        }
+        chunks.push(block);
+        used += block.length + 2;
+      }
+      if (omitted > 0) {
+        chunks.push(
+          `… (${omitted} more root cause(s) omitted to stay within ${maxTokens}-token budget)`,
+        );
+      }
+      return { text: chunks.join("\n\n") };
+    }
+    case "metrics": {
+      const buckets = summarizeMetricsMatrix(context.metrics ?? []);
+      return { text: renderMetricsMatrixText(buckets) };
+    }
+    case "roi": {
+      const summary = summarizeRuleRoi(context.metrics ?? [], {
+        priceOverrides: context.priceOverrides,
+      });
+      return { text: renderRuleRoiText(summary) };
     }
     case "check":
       return renderCheck(paths, loaded, health, request.page);

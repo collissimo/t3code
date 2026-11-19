@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  DEFAULT_SIM_JEV_SETTINGS,
   ProjectId,
   RunId,
   ThreadId,
@@ -11,6 +12,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2RunStatus,
+  type SimJevSettings,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +25,7 @@ import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import { USER_STOP_REASON } from "../orchestration-v2/RunExecutionService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
+  type SimMetricEvent,
   type SimState,
   SimService,
   type SimTelemetryEvent,
@@ -56,10 +59,15 @@ type Call =
       readonly workspaceRoot: string | undefined;
     }
   | { readonly kind: "telemetry"; readonly event: SimTelemetryEvent }
+  | { readonly kind: "metrics"; readonly events: ReadonlyArray<SimMetricEvent> }
   | { readonly kind: "read" };
 
 interface SetupOptions {
   readonly enabled?: boolean;
+  readonly harnessDir?: string;
+  readonly simDir?: string;
+  readonly jev?: Partial<SimJevSettings>;
+  readonly fetchImpl?: typeof fetch;
   readonly runs?: ReadonlyArray<OrchestrationV2Run>;
   readonly activeProviderThreadId?: string;
   readonly worktreePath?: string | null;
@@ -113,6 +121,7 @@ const setup = Effect.fnUntraced(function* (options: SetupOptions = {}) {
           return true;
         }),
       recordTelemetry: (event) => Effect.sync(() => void calls.push({ kind: "telemetry", event })),
+      recordMetrics: (events) => Effect.sync(() => void calls.push({ kind: "metrics", events })),
       hasRecentAttemptForFile: ({ file, workspaceRoot }) =>
         Effect.sync(() => {
           calls.push({ kind: "hasRecent", file, workspaceRoot });
@@ -127,16 +136,27 @@ const setup = Effect.fnUntraced(function* (options: SetupOptions = {}) {
       getObservedModels: () => read(new Set([KNOWN_MODEL])),
     }),
     ServerSettings.layerTest({
-      sim: { enabled: options.enabled ?? true, simDir: SIM_DIR, harnessDir: HARNESS_DIR },
+      sim: {
+        enabled: options.enabled ?? true,
+        simDir: options.simDir ?? SIM_DIR,
+        harnessDir: options.harnessDir ?? HARNESS_DIR,
+        ...(options.jev ? { jev: { ...DEFAULT_SIM_JEV_SETTINGS, ...options.jev } } : {}),
+      },
     }),
   );
   const reactor = yield* SimObserverReactor.SimObserverReactor.pipe(
-    Effect.provide(SimObserverReactor.layer.pipe(Layer.provide(dependencies))),
+    Effect.provide(
+      SimObserverReactor.layerWithOptions({
+        fetchImpl: options.fetchImpl,
+        awaitBackground: true,
+      }).pipe(Layer.provide(dependencies)),
+    ),
   );
   const telemetry = () => calls.flatMap((call) => (call.kind === "telemetry" ? [call.event] : []));
+  const metrics = () => calls.flatMap((call) => (call.kind === "metrics" ? call.events : []));
   const resets = () => calls.filter((call) => call.kind === "reset");
   const tracks = () => calls.filter((call) => call.kind === "track");
-  return { reactor, calls, telemetry, resets, tracks, projection };
+  return { reactor, calls, telemetry, metrics, resets, tracks, projection };
 });
 
 const event = (type: string, payload: object, extra: object = {}) =>
@@ -531,5 +551,116 @@ describe("SimObserverReactor", () => {
       }
       assert.deepStrictEqual(calls, []);
     }),
+  );
+
+  it.effect(
+    "verifies unrecorded global harness edits by real-file SHA-256 diff and suppresses no-op noise",
+    () =>
+      Effect.gen(function* () {
+        const tmp = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sim-observer-hash-"));
+        const harnessDir = NodePath.join(tmp, ".claude");
+        const simDir = NodePath.join(harnessDir, "sim");
+        NodeFS.mkdirSync(simDir, { recursive: true });
+        const agentsPath = NodePath.join(harnessDir, "AGENTS.md");
+        NodeFS.writeFileSync(agentsPath, "initial rules\n", "utf8");
+
+        const { reactor, telemetry } = yield* setup({ harnessDir, simDir });
+
+        // Run 1: mentions AGENTS.md in shell command without actually changing disk bytes -> no false positive
+        yield* reactor.handle(runEvent("run.created", makeRun(RUN_ID, "running")));
+        yield* reactor.handle(command("cmd-noop", `touch "${agentsPath}"`));
+        yield* reactor.handle(runEvent("run.updated", makeRun(RUN_ID, "completed")));
+        assert.strictEqual(
+          telemetry().filter((e) => e.kind === "unrecorded_harness_edit").length,
+          0,
+        );
+
+        // Run 2: real bytes on AGENTS.md change -> flagged with verifiedByHash: true
+        const run2 = RunId.make("run-2");
+        yield* reactor.handle(runEvent("run.created", makeRun(run2, "running", { ordinal: 2 })));
+        NodeFS.writeFileSync(agentsPath, "mutated rules\n", "utf8");
+        yield* reactor.handle(runEvent("run.updated", makeRun(run2, "completed", { ordinal: 2 })));
+        const edits = telemetry().filter((e) => e.kind === "unrecorded_harness_edit");
+        assert.strictEqual(edits.length, 1);
+        if (edits[0]?.kind === "unrecorded_harness_edit") {
+          assert.strictEqual(edits[0].verifiedByHash, true);
+          assert.deepStrictEqual(edits[0].files, ["~/.claude/AGENTS.md"]);
+        }
+      }),
+  );
+
+  it.effect(
+    "records deterministic opportunity metrics and async Jev sensors on completed runs",
+    () =>
+      Effect.gen(function* () {
+        const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            model: string;
+            questions: Record<string, unknown>;
+          };
+          const answers: Record<string, { type: "noul"; noul: number }> = {};
+          for (const key of Object.keys(body.questions)) {
+            answers[key] =
+              key === "corrects_agent_mistake" ||
+              key === "direct_answer_buried" ||
+              key === "waiting_for_user_input"
+                ? { type: "noul", noul: 0.91 }
+                : { type: "noul", noul: 0.05 };
+          }
+          return new Response(
+            JSON.stringify({
+              model: body.model,
+              answers,
+              usage: { input_tokens: 120, output_tokens: 0 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }) as typeof fetch;
+
+        const { reactor, telemetry, metrics } = yield* setup({
+          jev: { enabled: true, apiKey: "ts_fixture_key", mode: "shadow" },
+          fetchImpl: mockFetch,
+        });
+
+        // Turn 1: [STT] prompt answered with reading + `gh pr create` without linking PR
+        yield* reactor.handle(runEvent("run.created", makeRun(RUN_ID, "running")));
+        yield* reactor.handle(
+          turnItem("u1", { type: "user_message", text: "[STT] Bitte PR öffnen" }),
+        );
+        yield* reactor.handle(command("c1", 'gh pr create --title "Test" --body "Body"'));
+        yield* reactor.handle(
+          turnItem("a1", {
+            type: "assistant_message",
+            text: "Ich verstehe: PR anlegen. Nicht: mergen. Soll ich weitermachen?",
+          }),
+        );
+        yield* reactor.handle(runEvent("run.updated", makeRun(RUN_ID, "completed")));
+
+        // Turn 2: User correction -> triggers Jev Sensor 3 correction signal
+        const run2 = RunId.make("run-2");
+        yield* reactor.handle(runEvent("run.created", makeRun(run2, "running", { ordinal: 2 })));
+        yield* reactor.handle(
+          turnItem("u2", {
+            runId: run2,
+            type: "user_message",
+            text: "Nein, du hast den PR nicht verlinkt.",
+          }),
+        );
+
+        const recordedMetrics = metrics();
+        const detIds = recordedMetrics.map((m) =>
+          m.kind === "observation" ? `${m.detectorId}:${m.verdict}` : "",
+        );
+        assert.include(detIds, "det:stt_reading_declared:passed");
+        assert.include(detIds, "det:pr_linked_after_create:violated");
+        assert.include(detIds, "jev:direct_answer_buried:violated");
+        assert.include(detIds, "jev:boilerplate_or_flattery:passed");
+
+        const events = telemetry();
+        assert.isTrue(
+          events.some((e) => e.kind === "turn_ending_classified" && e.label === "waiting_for_user"),
+        );
+        assert.isTrue(events.some((e) => e.kind === "jev_correction_signal" && e.flagged === true));
+      }),
   );
 });

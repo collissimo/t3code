@@ -2,12 +2,15 @@
 import * as NodePath from "node:path";
 
 import type {
+  OrchestrationProjectShell,
   OrchestrationV2AppThread,
   OrchestrationV2DomainEvent,
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
+  ServerSettings as ServerSettingsConfig,
   ThreadId,
 } from "@t3tools/contracts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -20,6 +23,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import { USER_STOP_REASON } from "../orchestration-v2/RunExecutionService.ts";
+import { requireSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -32,6 +36,19 @@ import {
   expandHomeString,
   resolveSimPaths,
 } from "./SimContracts.ts";
+import {
+  diffHarnessSnapshots,
+  evaluateRunDetectors,
+  evaluationsToMetricEvents,
+  snapshotRealHarnessFiles,
+  type SimHarnessSnapshot,
+  type SimTurnToolCall,
+} from "./SimDetectors.ts";
+import {
+  evaluatePostTurnCompliance,
+  evaluateTurnEndingSignal,
+  evaluateUserCorrectionSignal,
+} from "./SimJevSensors.ts";
 import * as SimStore from "./SimStore.ts";
 
 /** Watches domain events for SIM context resets, unrecorded harness edits, and RSI signals. */
@@ -231,10 +248,37 @@ const runSelection = (run: OrchestrationV2Run): Selection => ({
   model: run.modelSelection.model,
 });
 
-const make = Effect.gen(function* () {
+interface RunAccumulator {
+  userText?: string | undefined;
+  assistantText?: string | undefined;
+  readonly commands: Array<string>;
+  readonly changedFiles: Array<string>;
+  readonly toolCalls: Array<SimTurnToolCall>;
+  harnessBefore?: SimHarnessSnapshot | undefined;
+}
+
+export interface SimObserverReactorOptions {
+  readonly fetchImpl?: typeof fetch | undefined;
+  /** Awaits async Jev sensor fibers inline instead of detaching them (for deterministic tests). */
+  readonly awaitBackground?: boolean | undefined;
+}
+
+const safeInputString = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value ?? "");
+  } catch {
+    return "";
+  }
+};
+
+const makeWithOptions = Effect.fn("SimObserverReactor.make")(function* (
+  options: SimObserverReactorOptions = {},
+) {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projectStore = yield* Effect.serviceOption(ProjectStoreV2);
+  const secretResolver = yield* Effect.serviceOption(SecretResolver.SecretResolver);
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const sim = yield* SimService;
 
@@ -242,6 +286,11 @@ const make = Effect.gen(function* () {
   const activeProviderThread = new Map<ThreadId, string>();
   const claudeSession = new Map<ThreadId, string>();
   const threadCwd = new Map<ThreadId, string | undefined>();
+  const threadProject = new Map<ThreadId, OrchestrationProjectShell | undefined>();
+  const threadBranch = new Map<ThreadId, string | undefined>();
+  const threadUserTurns = new Map<ThreadId, number>();
+  const lastAssistantText = new Map<ThreadId, string>();
+  const runAccumulators = new Map<string, RunAccumulator>();
   const pendingHarness = new Map<string, Set<string>>();
   const threadSelection = new Map<ThreadId, Selection>();
   const runSelectionById = new Map<string, Selection>();
@@ -251,19 +300,65 @@ const make = Effect.gen(function* () {
 
   const pendingKey = (threadId: string, runId: string) => `${threadId}\u0000${runId}`;
 
+  const accumulatorFor = (threadId: string, runId: string): RunAccumulator => {
+    const key = pendingKey(threadId, runId);
+    let acc = runAccumulators.get(key);
+    if (!acc) {
+      acc = { commands: [], changedFiles: [], toolCalls: [] };
+      remember(runAccumulators, key, acc);
+    }
+    return acc;
+  };
+
+  const projectFor = Effect.fnUntraced(function* (threadId: ThreadId) {
+    if (threadProject.has(threadId)) return threadProject.get(threadId);
+    const thread = yield* projections.findThread(threadId);
+    if (thread?.branch) remember(threadBranch, threadId, thread.branch);
+    let project: OrchestrationProjectShell | undefined;
+    if (thread?.projectId && Option.isSome(projectStore)) {
+      project = Option.getOrUndefined(
+        yield* projectStore.value
+          .getShell(thread.projectId)
+          .pipe(Effect.orElseSucceed(() => Option.none())),
+      );
+    }
+    remember(threadProject, threadId, project);
+    return project;
+  });
+
   const cwdFor = Effect.fnUntraced(function* (threadId: ThreadId) {
     if (threadCwd.has(threadId)) return threadCwd.get(threadId);
     const thread = yield* projections.findThread(threadId);
+    if (thread?.branch) remember(threadBranch, threadId, thread.branch);
     let cwd = thread?.worktreePath ?? undefined;
     if (!cwd && thread?.projectId && Option.isSome(projectStore)) {
-      const project = yield* projectStore.value
-        .getShell(thread.projectId)
-        .pipe(Effect.orElseSucceed(() => Option.none()));
-      cwd = Option.getOrUndefined(project)?.workspaceRoot;
+      const project = yield* projectFor(threadId);
+      cwd = project?.workspaceRoot;
     }
     remember(threadCwd, threadId, cwd);
     return cwd;
   });
+
+  const resolveJevKey = Effect.fnUntraced(function* (settings: ServerSettingsConfig) {
+    const raw = settings.sim.jev.apiKey;
+    if (typeof raw === "string") return raw.trim() || undefined;
+    if (Option.isNone(secretResolver)) return undefined;
+    return yield* requireSettingsSecret(secretResolver.value, raw).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+  });
+
+  const runBackground = (effect: Effect.Effect<void>) => {
+    const safe = effect.pipe(
+      Effect.catchCause((cause) => Effect.logWarning("SIM background sensor failed", { cause })),
+    );
+    return options.awaitBackground === true ? safe : Effect.forkDetach(safe).pipe(Effect.asVoid);
+  };
+
+  const safeRecordMetrics = (events: ReadonlyArray<import("./SimContracts.ts").SimMetricEvent>) =>
+    events.length === 0 || typeof sim.recordMetrics !== "function"
+      ? Effect.void
+      : sim.recordMetrics(events);
 
   const resetEpoch = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -321,11 +416,33 @@ const make = Effect.gen(function* () {
   const flushPendingHarness = Effect.fnUntraced(function* (
     event: OrchestrationV2DomainEvent,
     run: OrchestrationV2Run,
+    paths: SimResolvedPaths,
+    acc: RunAccumulator | undefined,
   ) {
     const key = pendingKey(event.threadId, run.id);
     const pending = pendingHarness.get(key);
-    if (!pending) return;
     pendingHarness.delete(key);
+
+    const beforeSnapshot = acc?.harnessBefore;
+    const hashVerified = beforeSnapshot !== undefined && beforeSnapshot.size > 0;
+    const hashChanged = hashVerified
+      ? diffHarnessSnapshots(beforeSnapshot, snapshotRealHarnessFiles(paths))
+      : [];
+    const hashChangedSet = new Set(hashChanged);
+
+    const candidates = new Set<string>(hashChanged);
+    if (pending) {
+      for (const file of pending) {
+        // When real-file hashes were captured, drop global harness paths whose real digest did not change
+        // (eliminating noise from scratch copies, sandboxes, and no-op shell commands).
+        if (hashVerified && file.startsWith("~/.claude/") && !hashChangedSet.has(file)) {
+          continue;
+        }
+        candidates.add(file);
+      }
+    }
+    if (candidates.size === 0) return;
+
     const cwd = yield* cwdFor(event.threadId);
     const snapshot = yield* sim.getStateSnapshot();
     const authors = new Set([`t3:${event.threadId}`]);
@@ -343,7 +460,7 @@ const make = Effect.gen(function* () {
       }
     }
     const unrecorded: Array<string> = [];
-    for (const file of pending) {
+    for (const file of candidates) {
       if (recordedToday.has(file)) continue;
       if (
         yield* sim.hasRecentAttemptForFile({
@@ -366,7 +483,153 @@ const make = Effect.gen(function* () {
       providerInstanceId: selection.providerInstanceId,
       model: selection.model,
       files: unrecorded,
+      ...(hashVerified && unrecorded.some((file) => hashChangedSet.has(file))
+        ? { verifiedByHash: true }
+        : {}),
     });
+  });
+
+  const evaluateCompletedRun = Effect.fnUntraced(function* (
+    event: OrchestrationV2DomainEvent,
+    run: OrchestrationV2Run,
+    settings: ServerSettingsConfig,
+    paths: SimResolvedPaths,
+    acc: RunAccumulator | undefined,
+  ) {
+    if (!acc) return;
+    const selection = runSelection(run);
+    const project = yield* projectFor(event.threadId);
+    const projectName = project?.title;
+    const repo = project?.repositoryIdentity ?? null;
+    const hasRemote = repo !== null;
+    const repoOwnership: "mine" | "foreign" | "unknown" =
+      repo === null
+        ? "unknown"
+        : repo.locator.remoteName === "upstream" && !repo.origin
+          ? "foreign"
+          : "mine";
+    const ts = DateTime.formatIso(event.occurredAt);
+
+    const evidence = {
+      ts,
+      threadId: event.threadId,
+      runId: run.id,
+      providerInstanceId: selection.providerInstanceId,
+      model: selection.model,
+      project: projectName,
+      userText: acc.userText,
+      assistantText: acc.assistantText,
+      commands: acc.commands,
+      changedFiles: acc.changedFiles,
+      toolCalls: acc.toolCalls,
+      repoOwnership,
+      hasRemote,
+      currentBranch: threadBranch.get(event.threadId),
+    };
+
+    const evaluations = evaluateRunDetectors(evidence);
+    if (evaluations.length > 0) {
+      yield* safeRecordMetrics(evaluationsToMetricEvents(evidence, evaluations));
+      for (const evaluation of evaluations) {
+        if (evaluation.verdict !== "violated") continue;
+        yield* sim.recordTelemetry({
+          ts,
+          kind: "detector_evaluated",
+          threadId: event.threadId,
+          runId: run.id,
+          providerInstanceId: selection.providerInstanceId,
+          model: selection.model,
+          ...(projectName ? { project: projectName } : {}),
+          detectorId: evaluation.detectorId,
+          ...(evaluation.problemId ? { problemId: evaluation.problemId } : {}),
+          ...(evaluation.attemptId ? { attemptId: evaluation.attemptId } : {}),
+          verdict: evaluation.verdict,
+          source: "deterministic",
+          evidence: evaluation.evidence,
+        });
+      }
+    }
+
+    if (run.status !== "completed" || !settings.sim.jev.enabled || !acc.assistantText?.trim()) {
+      return;
+    }
+
+    const resolvedApiKey = yield* resolveJevKey(settings);
+    const toolSummary = [
+      ...acc.toolCalls.map((call) => call.name),
+      ...acc.commands.map((cmd) => `cmd:${cmd.slice(0, 60)}`),
+      ...acc.changedFiles.map((file) => `file:${file}`),
+    ]
+      .slice(0, 20)
+      .join("; ");
+
+    yield* runBackground(
+      Effect.gen(function* () {
+        const jevOptions = {
+          settings: settings.sim.jev,
+          resolvedApiKey,
+          paths,
+          projectName,
+          fetchImpl: options.fetchImpl,
+        };
+        const [compliance, turnEnding] = yield* Effect.promise(() =>
+          Promise.all([
+            evaluatePostTurnCompliance(
+              {
+                ts,
+                threadId: event.threadId,
+                runId: run.id,
+                providerInstanceId: selection.providerInstanceId,
+                model: selection.model,
+                project: projectName,
+                userPrompt: acc.userText ?? "",
+                assistantReply: acc.assistantText ?? "",
+                toolSummary,
+              },
+              jevOptions,
+            ),
+            evaluateTurnEndingSignal(
+              {
+                ts,
+                threadId: event.threadId,
+                runId: run.id,
+                providerInstanceId: selection.providerInstanceId,
+                model: selection.model,
+                project: projectName,
+                assistantReply: acc.assistantText ?? "",
+                toolSummary,
+              },
+              jevOptions,
+            ),
+          ]),
+        );
+
+        if (compliance && compliance.length > 0) {
+          yield* safeRecordMetrics(compliance);
+          for (const metric of compliance) {
+            if (metric.kind !== "observation" || metric.verdict !== "violated") continue;
+            yield* sim.recordTelemetry({
+              ts: metric.ts,
+              kind: "detector_evaluated",
+              threadId: event.threadId,
+              runId: run.id,
+              providerInstanceId: selection.providerInstanceId,
+              model: selection.model,
+              ...(projectName ? { project: projectName } : {}),
+              detectorId: metric.detectorId,
+              ...(metric.problemId ? { problemId: metric.problemId } : {}),
+              verdict: metric.verdict,
+              source: "jev",
+              confidence: metric.confidence,
+              evidence: metric.evidence,
+            });
+          }
+        }
+        if (turnEnding) {
+          yield* sim.recordTelemetry(turnEnding);
+        }
+      }),
+    );
   });
 
   const observeModel = Effect.fnUntraced(function* (
@@ -388,6 +651,7 @@ const make = Effect.gen(function* () {
 
   const handleTurnItem = Effect.fnUntraced(function* (
     event: Extract<OrchestrationV2DomainEvent, { type: "turn-item.updated" }>,
+    settings: ServerSettingsConfig,
     paths: SimResolvedPaths,
   ) {
     const item = event.payload;
@@ -396,16 +660,88 @@ const make = Effect.gen(function* () {
       return;
     }
     if (item.status !== "completed") return;
+    const runId = item.runId ?? event.runId;
     if (item.type === "compaction") {
       if (firstSighting(handledItems, `compaction:${item.id}`))
         yield* resetEpoch(event.threadId, []);
+    } else if (item.type === "user_message") {
+      if (!firstSighting(handledItems, `user:${item.id}`)) return;
+      const text = item.text.trim();
+      if (runId && text) {
+        accumulatorFor(event.threadId, runId).userText = text;
+      }
+      const nextTurn = (threadUserTurns.get(event.threadId) ?? 0) + 1;
+      remember(threadUserTurns, event.threadId, nextTurn);
+      const previousAssistant = lastAssistantText.get(event.threadId);
+      if (nextTurn >= 2 && previousAssistant && text && settings.sim.jev.enabled) {
+        const selection =
+          (runId ? runSelectionById.get(runId) : undefined) ?? threadSelection.get(event.threadId);
+        const project = yield* projectFor(event.threadId);
+        const resolvedApiKey = yield* resolveJevKey(settings);
+        const ts = DateTime.formatIso(event.occurredAt);
+        yield* runBackground(
+          Effect.gen(function* () {
+            const signal = yield* Effect.promise(() =>
+              evaluateUserCorrectionSignal(
+                {
+                  ts,
+                  threadId: event.threadId,
+                  runId,
+                  providerInstanceId:
+                    selection?.providerInstanceId ?? event.providerInstanceId ?? "unknown",
+                  model: selection?.model ?? "unknown",
+                  project: project?.title,
+                  previousAssistant,
+                  userMessage: text,
+                },
+                {
+                  settings: settings.sim.jev,
+                  resolvedApiKey,
+                  paths,
+                  projectName: project?.title,
+                  fetchImpl: options.fetchImpl,
+                },
+              ),
+            );
+            if (signal) yield* sim.recordTelemetry(signal);
+          }),
+        );
+      }
+    } else if (item.type === "assistant_message") {
+      if (!firstSighting(handledItems, `assistant:${item.id}`)) return;
+      const text = item.text.trim();
+      if (text) {
+        remember(lastAssistantText, event.threadId, text);
+        if (runId) {
+          const acc = accumulatorFor(event.threadId, runId);
+          acc.assistantText = acc.assistantText ? `${acc.assistantText}\n\n${text}` : text;
+        }
+      }
     } else if (item.type === "file_change") {
       if (!firstSighting(handledItems, `file:${item.id}`)) return;
       const files = [item.fileName, ...(item.changes ?? []).map((change) => change.path)];
+      if (runId) accumulatorFor(event.threadId, runId).changedFiles.push(...files);
       yield* classifyFiles(event, item, files, paths);
     } else if (item.type === "command_execution") {
       if (!firstSighting(handledItems, `command:${item.id}`)) return;
+      if (runId) accumulatorFor(event.threadId, runId).commands.push(item.input);
       yield* classifyFiles(event, item, detectShellWriteTargets(item.input), paths);
+    } else if (item.type === "dynamic_tool") {
+      if (!firstSighting(handledItems, `tool:${item.id}`)) return;
+      if (runId && item.toolName) {
+        accumulatorFor(event.threadId, runId).toolCalls.push({
+          name: item.toolName,
+          input: safeInputString(item.input),
+        });
+      }
+    } else if (item.type === "subagent") {
+      if (!firstSighting(handledItems, `subagent-item:${item.id}`)) return;
+      if (runId) {
+        accumulatorFor(event.threadId, runId).toolCalls.push({
+          name: "delegate_task",
+          input: item.prompt,
+        });
+      }
     }
   });
 
@@ -474,10 +810,13 @@ const make = Effect.gen(function* () {
 
   const handleRunCreated = Effect.fnUntraced(function* (
     event: Extract<OrchestrationV2DomainEvent, { type: "run.created" }>,
+    paths: SimResolvedPaths,
   ) {
     const run = event.payload;
     remember(runSelectionById, run.id, runSelection(run));
     remember(threadSelection, event.threadId, runSelection(run));
+    const acc = accumulatorFor(event.threadId, run.id);
+    acc.harnessBefore ??= snapshotRealHarnessFiles(paths);
     if (run.restartContinuationOfRunId || run.usageLimitContinuationOfRunId) return;
     const stopped = interrupted.get(event.threadId);
     if (!stopped || stopped.runId === run.id) return;
@@ -496,6 +835,8 @@ const make = Effect.gen(function* () {
 
   const handleRunUpdated = Effect.fnUntraced(function* (
     event: Extract<OrchestrationV2DomainEvent, { type: "run.updated" }>,
+    settings: ServerSettingsConfig,
+    paths: SimResolvedPaths,
   ) {
     const run = event.payload;
     const selection = runSelection(run);
@@ -510,15 +851,22 @@ const make = Effect.gen(function* () {
         remember(interrupted, event.threadId, { ...selection, runId: run.id, reason });
       }
     }
-    if (TERMINAL_RUN_STATUSES.has(run.status)) yield* flushPendingHarness(event, run);
+    if (TERMINAL_RUN_STATUSES.has(run.status)) {
+      const key = pendingKey(event.threadId, run.id);
+      const acc = runAccumulators.get(key);
+      runAccumulators.delete(key);
+      yield* flushPendingHarness(event, run, paths, acc);
+      yield* evaluateCompletedRun(event, run, settings, paths, acc);
+    }
   });
 
   const handleEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
     const settings = yield* settingsService.getSettings;
     if (!settings.sim.enabled) return;
+    const paths = resolveSimPaths(settings.sim);
     switch (event.type) {
       case "turn-item.updated":
-        return yield* handleTurnItem(event, resolveSimPaths(settings.sim));
+        return yield* handleTurnItem(event, settings, paths);
       case "context-handoff.updated":
         if (
           event.payload.status === "ready" &&
@@ -544,6 +892,8 @@ const make = Effect.gen(function* () {
       }
       case "thread.created":
         threadCwd.delete(event.threadId);
+        threadProject.delete(event.threadId);
+        if (event.payload.branch) remember(threadBranch, event.threadId, event.payload.branch);
         remember(threadSelection, event.threadId, {
           providerInstanceId:
             event.payload.modelSelection.instanceId ?? event.payload.providerInstanceId,
@@ -555,9 +905,9 @@ const make = Effect.gen(function* () {
         threadCwd.delete(event.threadId);
         return yield* handleSelectionChange(event, event.payload);
       case "run.created":
-        return yield* handleRunCreated(event);
+        return yield* handleRunCreated(event, paths);
       case "run.updated":
-        return yield* handleRunUpdated(event);
+        return yield* handleRunUpdated(event, settings, paths);
       case "subagent.updated": {
         const subagent = event.payload;
         if (subagent.status !== "completed") return;
@@ -604,4 +954,7 @@ const make = Effect.gen(function* () {
   return { start, handle } satisfies SimObserverReactor["Service"];
 });
 
-export const layer = Layer.effect(SimObserverReactor, make);
+export const layerWithOptions = (options: SimObserverReactorOptions) =>
+  Layer.effect(SimObserverReactor, makeWithOptions(options));
+
+export const layer = layerWithOptions({});

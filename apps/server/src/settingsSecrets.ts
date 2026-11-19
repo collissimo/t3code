@@ -7,6 +7,7 @@ import {
   type ProviderInstanceConfig,
   type ServerSettings,
   type SettingsSecretValue,
+  SimJevSettings,
   SimlockDeviceHostConfig,
   TextGeneratorConfig,
   UsageLimitSourceConfig,
@@ -51,6 +52,7 @@ const textGeneratorSecretFields = secretSettingsFields(TextGeneratorConfig);
 const voiceSecretFields = secretSettingsFields(CloudSpeechCredentials);
 const easDeviceHostSecretFields = secretSettingsFields(EasDeviceHostConfig);
 const simlockDeviceHostSecretFields = secretSettingsFields(SimlockDeviceHostConfig);
+const simJevSecretFields = secretSettingsFields(SimJevSettings);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
 export interface SettingsSecret {
@@ -254,6 +256,14 @@ function mapSecretFieldGroups(
       voiceSecretFields,
       (provider) => `voice-cloud-${provider}`,
     ) as ServerSettings["cloudSpeechCredentials"],
+    sim: {
+      ...settings.sim,
+      jev: mapFields(
+        settings.sim.jev,
+        simJevSecretFields,
+        (field) => `sim-jev-${encode(field)}`,
+      ) as ServerSettings["sim"]["jev"],
+    },
     providerInstances,
     sourceControlHosts,
     usageLimitSources,

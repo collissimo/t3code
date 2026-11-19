@@ -621,12 +621,50 @@ export function applyServerSettingsPatch(
             ...(simPatch.simDir !== undefined ? { simDir: simPatch.simDir } : {}),
             ...(simPatch.harnessDir !== undefined ? { harnessDir: simPatch.harnessDir } : {}),
             ...(simPatch.injectRules !== undefined ? { injectRules: simPatch.injectRules } : {}),
+            ...(simPatch.jitDelivery !== undefined ? { jitDelivery: simPatch.jitDelivery } : {}),
+            ...(simPatch.autonomousMicroAudit !== undefined
+              ? { autonomousMicroAudit: simPatch.autonomousMicroAudit }
+              : {}),
             ...(simPatch.ruleFiles !== undefined ? { ruleFiles: simPatch.ruleFiles } : {}),
             ...(simPatch.providerOverrides !== undefined
               ? { providerOverrides: simPatch.providerOverrides }
               : {}),
             ...(simPatch.advisorModelSelection !== undefined
               ? { advisorModelSelection: simPatch.advisorModelSelection }
+              : {}),
+            ...(simPatch.jev !== undefined
+              ? {
+                  jev: {
+                    ...current.sim.jev,
+                    ...(simPatch.jev.enabled !== undefined
+                      ? { enabled: simPatch.jev.enabled }
+                      : {}),
+                    ...(simPatch.jev.mode !== undefined ? { mode: simPatch.jev.mode } : {}),
+                    ...(simPatch.jev.model !== undefined ? { model: simPatch.jev.model } : {}),
+                    ...(simPatch.jev.endpoint !== undefined
+                      ? { endpoint: simPatch.jev.endpoint }
+                      : {}),
+                    ...(simPatch.jev.apiKey !== undefined ? { apiKey: simPatch.jev.apiKey } : {}),
+                    ...(simPatch.jev.passBelow !== undefined
+                      ? { passBelow: simPatch.jev.passBelow }
+                      : {}),
+                    ...(simPatch.jev.flagAbove !== undefined
+                      ? { flagAbove: simPatch.jev.flagAbove }
+                      : {}),
+                    ...(simPatch.jev.timeoutMs !== undefined
+                      ? { timeoutMs: simPatch.jev.timeoutMs }
+                      : {}),
+                    ...(simPatch.jev.dailyTokenBudget !== undefined
+                      ? { dailyTokenBudget: simPatch.jev.dailyTokenBudget }
+                      : {}),
+                    ...(simPatch.jev.excludedProjects !== undefined
+                      ? { excludedProjects: simPatch.jev.excludedProjects }
+                      : {}),
+                    ...(simPatch.jev.redactSecrets !== undefined
+                      ? { redactSecrets: simPatch.jev.redactSecrets }
+                      : {}),
+                  },
+                }
               : {}),
           },
         }

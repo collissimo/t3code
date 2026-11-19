@@ -53,16 +53,19 @@ const attemptFields = {
 const SimReadTool = Tool.make("sim_read", {
   ...shared,
   description:
-    "Read the SIM record of harness changes (AGENTS.md, CLAUDE.md, notes, hooks). Actions: index, show (ids, brief), brief_all, find (query), by_file (file), check, review (policy, harness), audit (since|days, limit, includeClaudeLogs), inspect_thread (threadId). Reading records server-side read state that harness edits and SIM writes require.",
+    "Read the SIM record of harness changes (AGENTS.md, CLAUDE.md, notes, hooks). Actions: index, show (ids, brief), brief_all, brief (ids|file|query, maxTokens), find (query), by_file (file), check, review (policy, harness), metrics (days), roi (days), audit (since|days, limit, includeClaudeLogs), inspect_thread (threadId). Reading records server-side read state that harness edits and SIM writes require.",
   parameters: Schema.Struct({
     action: Schema.Literals([
       "index",
       "show",
       "brief_all",
+      "brief",
       "find",
       "by_file",
       "check",
       "review",
+      "metrics",
+      "roi",
       "audit",
       "inspect_thread",
     ]),
@@ -75,6 +78,7 @@ const SimReadTool = Tool.make("sim_read", {
     page: Schema.optionalKey(Schema.Int),
     since: Schema.optionalKey(Schema.String),
     days: Schema.optionalKey(Schema.Number),
+    maxTokens: Schema.optionalKey(Schema.Int),
     limit: Schema.optionalKey(Schema.Int),
     includeClaudeLogs: Schema.optionalKey(Schema.Boolean),
     threadId: Schema.optionalKey(Schema.String),

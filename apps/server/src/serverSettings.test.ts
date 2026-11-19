@@ -1972,6 +1972,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         "cloudSpeechCredentials.openrouter",
         "easDeviceHosts.[].accessToken",
         "simlockDeviceHosts.[].agentToken",
+        "sim.jev.apiKey",
         "usageLimitSources.*.managementKey",
         "textGenerators.*.apiKey",
       ]);

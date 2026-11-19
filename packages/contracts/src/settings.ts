@@ -1373,6 +1373,57 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+export const SimJevMode = Schema.Literals(["shadow", "active"]);
+export type SimJevMode = typeof SimJevMode.Type;
+
+export const DEFAULT_SIM_JEV_MODEL = "jev-1.14.0";
+export const DEFAULT_SIM_JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+
+const SimJevProbability = Schema.Finite.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(1),
+);
+
+export const SimJevSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  mode: SimJevMode.pipe(Schema.withDecodingDefault(Effect.succeed("shadow" as const))),
+  model: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIM_JEV_MODEL)),
+  ),
+  endpoint: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIM_JEV_ENDPOINT)),
+  ),
+  apiKey: SettingsSecretValue.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  passBelow: SimJevProbability.pipe(Schema.withDecodingDefault(Effect.succeed(0.15))),
+  flagAbove: SimJevProbability.pipe(Schema.withDecodingDefault(Effect.succeed(0.85))),
+  timeoutMs: Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(100),
+    Schema.isLessThanOrEqualTo(30_000),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(1_500))),
+  dailyTokenBudget: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(5_000_000)),
+  ),
+  excludedProjects: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  redactSecrets: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type SimJevSettings = typeof SimJevSettings.Type;
+
+export const DEFAULT_SIM_JEV_SETTINGS: SimJevSettings = {
+  enabled: false,
+  mode: "shadow",
+  model: DEFAULT_SIM_JEV_MODEL,
+  endpoint: DEFAULT_SIM_JEV_ENDPOINT,
+  apiKey: "",
+  passBelow: 0.15,
+  flagAbove: 0.85,
+  timeoutMs: 1_500,
+  dailyTokenBudget: 5_000_000,
+  excludedProjects: [],
+  redactSecrets: true,
+};
+
 export const OrchestratorThreadWorkerEffort = Schema.Struct({
   threadId: ThreadId,
   effort: TrimmedNonEmptyString,
@@ -1499,6 +1550,8 @@ export const ServerSettings = Schema.Struct({
     simDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
     harnessDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
     injectRules: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+    jitDelivery: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+    autonomousMicroAudit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
     ruleFiles: Schema.Array(TrimmedNonEmptyString).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
     ),
@@ -1514,6 +1567,8 @@ export const ServerSettings = Schema.Struct({
         }),
       ),
     ),
+    /** Optional TypeSafe Jev System-1 classifier for semantic routing, 3-zone checks, and corrections. */
+    jev: SimJevSettings.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIM_JEV_SETTINGS))),
   }).pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -1521,12 +1576,15 @@ export const ServerSettings = Schema.Struct({
         simDir: "",
         harnessDir: "",
         injectRules: true,
+        jitDelivery: true,
+        autonomousMicroAudit: true,
         ruleFiles: [],
         providerOverrides: {},
         advisorModelSelection: {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           model: "claude-fable-5-2",
         },
+        jev: DEFAULT_SIM_JEV_SETTINGS,
       }),
     ),
   ),
@@ -1994,9 +2052,31 @@ export const ServerSettingsPatch = Schema.Struct({
       simDir: Schema.optionalKey(TrimmedString),
       harnessDir: Schema.optionalKey(TrimmedString),
       injectRules: Schema.optionalKey(Schema.Boolean),
+      jitDelivery: Schema.optionalKey(Schema.Boolean),
+      autonomousMicroAudit: Schema.optionalKey(Schema.Boolean),
       ruleFiles: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
       providerOverrides: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, Schema.Boolean)),
       advisorModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+      jev: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          mode: Schema.optionalKey(SimJevMode),
+          model: Schema.optionalKey(TrimmedNonEmptyString),
+          endpoint: Schema.optionalKey(TrimmedNonEmptyString),
+          apiKey: Schema.optionalKey(SettingsSecretValue),
+          passBelow: Schema.optionalKey(SimJevProbability),
+          flagAbove: Schema.optionalKey(SimJevProbability),
+          timeoutMs: Schema.optionalKey(
+            Schema.Int.check(
+              Schema.isGreaterThanOrEqualTo(100),
+              Schema.isLessThanOrEqualTo(30_000),
+            ),
+          ),
+          dailyTokenBudget: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+          excludedProjects: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+          redactSecrets: Schema.optionalKey(Schema.Boolean),
+        }),
+      ),
     }),
   ),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
