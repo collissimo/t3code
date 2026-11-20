@@ -41,7 +41,7 @@ const TokenFile = Schema.Struct({
   project_id: Schema.optional(Schema.String),
 });
 // The 1.5.x CLI never writes acp_token.json: it keeps its sign-in in the OS keyring, or in
-// antigravity-oauth-token without one. It stores no OAuth client; T3 refreshes the token with
+// antigravity-oauth-token without one or when T3 bypasses the keyring. It stores no OAuth client; T3 refreshes the token with
 // agy's own installed-app OAuth client, which ships in every agy binary and is public by design.
 const AGY_OAUTH_CLIENT = {
   client_id: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
@@ -348,6 +348,8 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     if (yield* fs.exists(tokenPath)) {
       return yield* fs.readFileString(tokenPath).pipe(Effect.flatMap(decodeTokenFile));
     }
+    // Google account instances bypass the keyring, whose one entry every profile shares.
+    if (input.authMethod !== "oauth-business") return undefined;
     const stored = yield* readKeyringSecret;
     return stored === undefined ? undefined : yield* decodeCliToken(stored);
   });
