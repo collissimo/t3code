@@ -589,6 +589,14 @@ export const layerWithOptions = (
                     )
                   : false;
                 if (scriptToolAvailable) capabilities.add("script");
+                const backgroundWait = yield* registry.get(providerInstanceId).pipe(
+                  Effect.flatMap((adapter) => adapter.getCapabilities()),
+                  Effect.map((adapter) => adapter.tools.supportsBackgroundWait === true),
+                  Effect.option,
+                );
+                if (Option.getOrElse(backgroundWait, () => false)) {
+                  capabilities.add("background-wait");
+                }
                 const subagent = yield* projectionStore.getThread(threadId).pipe(
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
@@ -615,6 +623,9 @@ export const layerWithOptions = (
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable &&
                     resolved.capabilities.has("script") === scriptToolAvailable &&
+                    // A failed capability read cannot tell that the live credential is wrong.
+                    (Option.isNone(backgroundWait) ||
+                      resolved.capabilities.has("background-wait") === backgroundWait.value) &&
                     // A credential issued while the lineage read failed is replaced once it works.
                     (resolved.thread.subagent === true) === subagent
                   ) {
@@ -1047,23 +1058,36 @@ export const layerWithOptions = (
         // after each pass: queued events can also store more cut-off items.
         let pending = yield* readCutOff;
         for (let pass = 0; pass < 3 && pending.length > 0; pass++) {
+          const { nodes } = yield* projectionStore.getThreadRecords(threadId, ["nodes"], {
+            nodeIds: pending.flatMap((item) => (item.nodeId === null ? [] : [item.nodeId])),
+          });
           for (const item of pending) {
             const now = yield* DateTime.now;
-            yield* eventSink.writeIfTurnItemUnchanged({
-              expected: item,
-              events: [
-                {
-                  id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
-                  type: "turn-item.updated",
-                  threadId,
-                  ...(item.runId === null ? {} : { runId: item.runId }),
-                  ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
-                  driver,
-                  occurredAt: now,
-                  payload: { ...item, status: "interrupted", completedAt: now, updatedAt: now },
-                },
-              ],
+            const node = nodes.find((candidate) => candidate.id === item.nodeId);
+            const events: Array<OrchestrationV2DomainEvent> = [];
+            if (node !== undefined && isOrchestrationV2WorkActive(node.status)) {
+              events.push({
+                id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
+                type: "node.updated",
+                threadId,
+                ...(node.runId === null ? {} : { runId: node.runId }),
+                nodeId: node.id,
+                driver,
+                occurredAt: now,
+                payload: { ...node, status: "interrupted", completedAt: now },
+              });
+            }
+            events.push({
+              id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
+              type: "turn-item.updated",
+              threadId,
+              ...(item.runId === null ? {} : { runId: item.runId }),
+              ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+              driver,
+              occurredAt: now,
+              payload: { ...item, status: "interrupted", completedAt: now, updatedAt: now },
             });
+            yield* eventSink.writeIfTurnItemUnchanged({ expected: item, events });
           }
           pending = yield* readCutOff;
         }

@@ -24,6 +24,7 @@ const ALL_MCP_CAPABILITIES = [
   "pull-requests",
   "script",
   "issues",
+  "background-wait",
 ] as const;
 export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
@@ -206,6 +207,15 @@ export const hiddenFromOutsideClients = (): boolean => {
   return scope === undefined || scope.thread !== undefined;
 };
 
+/** `hiddenFromOutsideClients`, and hidden from a thread whose provider cannot hold for background work. */
+export const hiddenWithoutBackgroundWait = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return (
+    scope === undefined || (scope.thread !== undefined && scope.capabilities.has("background-wait"))
+  );
+};
+
 /** `McpSchema.EnabledWhen` for tools that only serve links, hidden while the beta is off. */
 export const hiddenWhileLinksOff = (): boolean => {
   const fiber = Fiber.getCurrent();
@@ -234,6 +244,7 @@ export const hiddenFromOutsideClientsOrSimOff = (): boolean =>
 /** Every `McpSchema.EnabledWhen` that hides a tool from outside clients, which `McpToolAccess` requires on thread-bound tools. */
 export const isHiddenFromOutsideClients = (enabledWhen: unknown): boolean =>
   enabledWhen === hiddenFromOutsideClients ||
+  enabledWhen === hiddenWithoutBackgroundWait ||
   enabledWhen === hiddenWhileScriptToolOff ||
   enabledWhen === hiddenFromOutsideClientsOrSimOff;
 
