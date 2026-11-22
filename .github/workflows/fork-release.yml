@@ -78,25 +78,40 @@ jobs:
           echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
           echo "fork_sha=$fork_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Skip when the last release has the same commits
+      # GitHub pauses Actions on a fork whose usage it deems too large (it did on 2026-11-20, with
+      # about eight builds a day), so a newer upstream nightly alone builds at most every
+      # MIN_UPSTREAM_INTERVAL_HOURS; a new fork commit still builds at once. A skipped nightly is
+      # picked up by the next dispatch or cron run after the interval.
+      - name: Skip when the last release has the same commits or is too recent
         id: due
         env:
           FORCE: ${{ inputs.force || false }}
           FORK_SHA: ${{ steps.refs.outputs.fork_sha }}
           UPSTREAM_SHA: ${{ steps.refs.outputs.upstream_sha }}
+          MIN_UPSTREAM_INTERVAL_HOURS: "12"
         run: |
           set -euo pipefail
           last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""')
           body=""
+          published=""
           if [[ -n "$last" ]]; then
             body=$(gh release view "$last" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+            published=$(gh release view "$last" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq .publishedAt)
           fi
-          if [[ "$FORCE" != "true" && "$body" == *"fork=$FORK_SHA upstream=$UPSTREAM_SHA "* ]]; then
+          due=true
+          if [[ "$FORCE" == "true" ]]; then
+            :
+          elif [[ "$body" == *"fork=$FORK_SHA upstream=$UPSTREAM_SHA "* ]]; then
             echo "$last already has fork $FORK_SHA and upstream $UPSTREAM_SHA."
-            echo "due=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "due=true" >> "$GITHUB_OUTPUT"
+            due=false
+          elif [[ "$body" == *"fork=$FORK_SHA "* && -n "$published" ]]; then
+            age=$(( $(date -u +%s) - $(date -u -d "$published" +%s) ))
+            if (( age < MIN_UPSTREAM_INTERVAL_HOURS * 3600 )); then
+              echo "$last has fork $FORK_SHA and is $((age / 3600))h old; the new upstream nightly waits for the ${MIN_UPSTREAM_INTERVAL_HOURS}h interval."
+              due=false
+            fi
           fi
+          echo "due=$due" >> "$GITHUB_OUTPUT"
 
       # Plain git, as in release-desktop.yml: checkout's cleanup trips over the vendored .repos gitlinks.
       - name: Check out the fork
@@ -444,3 +459,18 @@ jobs:
             --title "T3 Code Nightly $VERSION (fork)" \
             --notes "$notes" \
             --prerelease
+
+      # Updaters read only the newest release; each one holds ~0.5 GB of installers. A pruned
+      # installed version only costs electron-updater its differential download.
+      - name: Prune old releases
+        env:
+          KEEP_RELEASES: "10"
+        run: |
+          set -euo pipefail
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --exclude-drafts \
+            --json tagName,publishedAt --jq "[.[] | select(.tagName | test(\"-nightly\\\\.\"))] | sort_by(.publishedAt) | reverse | .[$KEEP_RELEASES:] | .[].tagName" |
+            while read -r tag; do
+              echo "Deleting $tag"
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag ||
+                echo "::warning::could not delete $tag"
+            done
