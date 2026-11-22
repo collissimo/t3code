@@ -33,6 +33,12 @@ export async function runCliCommand() {
   } else if (command === "dictation-worker") {
     const { runDictationWorker } = await import("./dictation/worker.ts");
     runDictationWorker();
+  } else if (command === "__cursor-sdk-worker") {
+    const [NodeServices, { runCursorSdkWorker }] = await Promise.all([
+      import("@effect/platform-node/NodeServices"),
+      import("@t3tools/provider-cursor/server/worker"),
+    ]);
+    await runCursorSdkWorker(NodeServices.layer);
   } else {
     enableCliCompileCache();
     // Windows desktop launches without stdin; attach before reading, except on fast paths using pipes.

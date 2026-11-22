@@ -47,7 +47,6 @@ const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() |
 const configuredReleaseChannel =
   process.env.T3CODE_BUILT_DEV === "1" ? "dev" : process.env.VITE_RELEASE_CHANNEL?.trim() || "";
 const configuredDesktopUpdateRepository = buildReleaseRepository();
-const configuredFeatureSecrets = process.env.T3CODE_FEATURE_SECRETS?.trim() || "";
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
@@ -368,7 +367,6 @@ export default defineConfig(({ command }) => {
         configuredDesktopUpdateRepository,
       ),
       __T3CODE_BUILD_RELEASE_REPOSITORY__: JSON.stringify(configuredDesktopUpdateRepository),
-      "import.meta.env.T3CODE_FEATURE_SECRETS": JSON.stringify(configuredFeatureSecrets),
       "import.meta.env.VITE_RELEASE_CHANNEL": JSON.stringify(configuredReleaseChannel),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
     },
