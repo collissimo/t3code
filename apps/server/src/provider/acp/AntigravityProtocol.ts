@@ -1,7 +1,9 @@
-import type {
-  ProviderApprovalOption,
-  ProviderUserInputAnswers,
-  UserInputQuestion,
+import {
+  TrimmedNonEmptyString,
+  type OrchestrationV2UserInputQuestion,
+  type ProviderApprovalOption,
+  type ProviderUserInputAnswers,
+  type UserInputQuestion,
 } from "@t3tools/contracts";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import * as Option from "effect/Option";
@@ -10,6 +12,7 @@ import * as Schema from "effect/Schema";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpWireSchema from "effect-acp/schema-v1";
 
+import type { AcpAdapterV2Flavor } from "@t3tools/provider-acp/server/adapter";
 import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
 
 import {
@@ -114,11 +117,14 @@ function copyBoundedText(text: string): string {
   return Buffer.from(text, "utf16le").toString("utf16le");
 }
 
-function questionLabel(option: EffectAcpSchema.PermissionOption): string {
-  const label = option.name.trim() || option.optionId;
+function boundQuestionLabel(label: string): string {
   return label.length > QUESTION_LABEL_LIMIT
     ? copyBoundedText(`${label.slice(0, QUESTION_LABEL_LIMIT - 3)}...`)
     : label;
+}
+
+function questionLabel(option: EffectAcpSchema.PermissionOption): string {
+  return boundQuestionLabel(option.name.trim() || option.optionId);
 }
 
 export function extractAntigravityUserInputQuestion(
@@ -172,6 +178,139 @@ export function makeAntigravityUserInputResponse(
   const option = matchingLabels.length === 1 ? matchingLabels[0] : undefined;
   return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : undefined;
 }
+
+const isAntigravityElicitationForm = Schema.is(
+  Schema.Struct({
+    properties: Schema.Record(Schema.String, Schema.Unknown),
+    required: Schema.optional(Schema.Array(Schema.String)),
+  }),
+);
+const antigravityElicitationChoice = Schema.Struct({
+  const: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  description: Schema.optional(Schema.String),
+});
+const isAntigravitySingleQuestion = Schema.is(
+  Schema.Struct({
+    type: Schema.Literal("string"),
+    title: TrimmedNonEmptyString,
+    description: Schema.optional(Schema.String),
+    oneOf: Schema.Array(antigravityElicitationChoice),
+  }),
+);
+const isAntigravityMultiQuestion = Schema.is(
+  Schema.Struct({
+    type: Schema.Literal("array"),
+    title: TrimmedNonEmptyString,
+    description: Schema.optional(Schema.String),
+    items: Schema.Struct({
+      anyOf: Schema.Array(antigravityElicitationChoice),
+    }),
+  }),
+);
+const isAntigravityOtherCompanion = Schema.is(
+  Schema.Struct({
+    type: Schema.Literal("string"),
+    title: Schema.Literal("Other"),
+  }),
+);
+
+// Antigravity ask_question pairs each qN choice with an optional qN_other text field and puts
+// the question text in title. Fold the companion into one step with inline custom answers.
+export const extractAntigravityElicitationForm: NonNullable<
+  AcpAdapterV2Flavor["extractElicitationForm"]
+> = (request) => {
+  if (request.mode !== "form" || !isAntigravityElicitationForm(request.requestedSchema)) {
+    return undefined;
+  }
+  const { properties, required } = request.requestedSchema;
+  if (required !== undefined && required.length > 0) return undefined;
+  const questions: Array<OrchestrationV2UserInputQuestion> = [];
+  for (const [id, field] of Object.entries(properties)) {
+    if (!/^q[1-9]\d*$/.test(id)) continue;
+    if (!isAntigravityOtherCompanion(properties[`${id}_other`])) return undefined;
+    const parsed = isAntigravityMultiQuestion(field)
+      ? { field, choices: field.items.anyOf, multiSelect: true }
+      : isAntigravitySingleQuestion(field)
+        ? { field, choices: field.oneOf, multiSelect: false }
+        : undefined;
+    if (parsed === undefined || parsed.choices.length === 0) return undefined;
+    if (new Set(parsed.choices.map((option) => option.const)).size !== parsed.choices.length) {
+      return undefined;
+    }
+    const header = parsed.field.description?.trim();
+    questions.push({
+      id,
+      header: header ? boundQuestionLabel(header) : `Question ${questions.length + 1}`,
+      question: boundText(parsed.field.title),
+      ...(parsed.multiSelect ? { multiSelect: true } : {}),
+      options: parsed.choices.map((option) => {
+        const label = boundQuestionLabel(option.title);
+        const description = option.description?.trim();
+        return {
+          value: option.const,
+          label,
+          description: description ? boundQuestionLabel(description) : label,
+        };
+      }),
+    });
+  }
+  if (questions.length === 0 || Object.keys(properties).length !== questions.length * 2) {
+    return undefined;
+  }
+  return {
+    questions,
+    respond: (answers) => {
+      const content: Record<string, string | Array<string>> = {};
+      for (const question of questions) {
+        const answer = Object.hasOwn(answers, question.id) ? answers[question.id] : undefined;
+        if (question.multiSelect) {
+          if (Array.isArray(answer)) {
+            const selected = [
+              ...new Set(
+                answer.filter(
+                  (entry): entry is string =>
+                    typeof entry === "string" &&
+                    question.options.some((option) => option.value === entry),
+                ),
+              ),
+            ];
+            if (selected.length === 0) return { action: "cancel" };
+            content[question.id] = selected;
+          } else if (typeof answer === "string" && answer.trim().length > 0) {
+            content[`${question.id}_other`] = answer;
+          } else {
+            return { action: "cancel" };
+          }
+        } else {
+          if (typeof answer !== "string" || answer.trim().length === 0) {
+            return { action: "cancel" };
+          }
+          if (question.options.some((option) => option.value === answer)) {
+            content[question.id] = answer;
+          } else {
+            // Intake appends server attachment references to the selected choice ID.
+            const attachmentStart = answer.indexOf("\n\n");
+            const selectedOption =
+              attachmentStart > 0
+                ? question.options.find(
+                    (option) =>
+                      option.value === answer.slice(0, attachmentStart) &&
+                      /^\n\nAttached (?:image|file) "(?:\\.|[^"\\\r\n])*": "/.test(
+                        answer.slice(attachmentStart),
+                      ),
+                  )
+                : undefined;
+            content[`${question.id}_other`] = selectedOption
+              ? `${selectedOption.label}${answer.slice(attachmentStart)}`
+              : answer;
+          }
+        }
+      }
+      return { action: "accept", content };
+    },
+  };
+};
 
 function boundText(text: string, limit = TOOL_TEXT_LIMIT): string {
   return text.length <= limit

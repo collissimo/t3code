@@ -4,6 +4,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpWireSchema from "effect-acp/schema-v1";
 
 import {
+  extractAntigravityElicitationForm,
   extractAntigravityUserInputQuestion,
   antigravityApprovalOptions,
   antigravitySubagentOutput,
@@ -263,6 +264,137 @@ describe("Antigravity permissions and questions", () => {
     expect(question?.question.length).toBeLessThanOrEqual(8_000);
     expect(question?.options[0]?.label.length).toBeLessThanOrEqual(512);
     expect(question?.options[0]?.value).toBe("stable-choice");
+  });
+});
+
+describe("Antigravity ask_question elicitation forms", () => {
+  const askFormRequest = {
+    mode: "form" as const,
+    sessionId: "session-1",
+    elicitationId: "elicit-1",
+    message: "The agent has 2 questions.",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        q1: {
+          type: "string",
+          title: "Which light palette works best?",
+          oneOf: [
+            { const: "1", title: "(Recommended) Cool stone" },
+            { const: "2", title: "Warm mineral" },
+          ],
+        },
+        q1_other: {
+          type: "string",
+          title: "Other",
+          description: "Optional free-form answer to: Which light palette works best?",
+        },
+        q2: {
+          type: "array",
+          title: "Which surfaces should update?",
+          items: {
+            anyOf: [
+              { const: "1", title: "Cards" },
+              { const: "2", title: "Sidebar" },
+            ],
+          },
+        },
+        q2_other: {
+          type: "string",
+          title: "Other",
+          description: "Optional free-form answer to: Which surfaces should update?",
+        },
+      },
+    },
+  } satisfies EffectAcpSchema.CreateElicitationRequest;
+
+  it("folds qN_other companions for single- and multi-select and routes answers back", () => {
+    const form = extractAntigravityElicitationForm(askFormRequest);
+    expect(form?.questions).toEqual([
+      {
+        id: "q1",
+        header: "Question 1",
+        question: "Which light palette works best?",
+        options: [
+          {
+            value: "1",
+            label: "(Recommended) Cool stone",
+            description: "(Recommended) Cool stone",
+          },
+          { value: "2", label: "Warm mineral", description: "Warm mineral" },
+        ],
+      },
+      {
+        id: "q2",
+        header: "Question 2",
+        question: "Which surfaces should update?",
+        multiSelect: true,
+        options: [
+          { value: "1", label: "Cards", description: "Cards" },
+          { value: "2", label: "Sidebar", description: "Sidebar" },
+        ],
+      },
+    ]);
+    expect(form?.respond({ q1: "1", q2: ["1", "2", "1"] })).toEqual({
+      action: "accept",
+      content: { q1: "1", q2: ["1", "2"] },
+    });
+    expect(form?.respond({ q1: "Soft slate", q2: "Only headers" })).toEqual({
+      action: "accept",
+      content: { q1_other: "Soft slate", q2_other: "Only headers" },
+    });
+    expect(
+      form?.respond({
+        q1: '2\n\nAttached image "ref.png": "/tmp/ref.png"',
+        q2: ["2"],
+      }),
+    ).toEqual({
+      action: "accept",
+      content: {
+        q1_other: 'Warm mineral\n\nAttached image "ref.png": "/tmp/ref.png"',
+        q2: ["2"],
+      },
+    });
+    expect(form?.respond({ q1: "   ", q2: ["1"] })).toEqual({ action: "cancel" });
+    expect(form?.respond({ q1: "1", q2: ["99"] })).toEqual({ action: "cancel" });
+  });
+
+  it("leaves non-ask_question or mixed schemas to the generic ACP parser", () => {
+    // Standalone free-form field alongside q1/q1_other must not be hidden.
+    expect(
+      extractAntigravityElicitationForm({
+        ...askFormRequest,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            ...askFormRequest.requestedSchema.properties,
+            notes: { type: "string", title: "Additional notes" },
+          },
+        },
+      }),
+    ).toBeUndefined();
+    // Standalone free-form-only form stays with the generic parser.
+    expect(
+      extractAntigravityElicitationForm({
+        ...askFormRequest,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            reason: { type: "string", title: "Why should we change this?" },
+          },
+        },
+      }),
+    ).toBeUndefined();
+    // Non-empty required list falls back rather than omitting a required field.
+    expect(
+      extractAntigravityElicitationForm({
+        ...askFormRequest,
+        requestedSchema: {
+          ...askFormRequest.requestedSchema,
+          required: ["q1"],
+        },
+      }),
+    ).toBeUndefined();
   });
 });
 
