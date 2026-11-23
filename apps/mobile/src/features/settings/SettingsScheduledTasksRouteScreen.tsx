@@ -896,6 +896,7 @@ function TaskForm({
       schedule,
       enabled: draft.enabled,
       threadId: draft.threadId,
+      ...(draft.threadId === null && draft.task?.threadId != null ? { unbindThread: true } : {}),
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       workspaceStrategy:
         draft.workspace === "root"
@@ -1105,14 +1106,14 @@ function TaskForm({
             <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
               <View className="min-w-0 flex-1">
                 <Text textRole="body" className="text-foreground">
-                  Archive finished runs
+                  <T>Archive finished runs</T>
                 </Text>
                 <Text className="text-sm text-foreground-muted">
-                  Keeps completed runs out of the thread list. Failed runs stay visible.
+                  <T>Keeps completed runs out of the thread list. Failed runs stay visible.</T>
                 </Text>
               </View>
               <ThemedSwitch
-                accessibilityLabel="Archive finished runs"
+                accessibilityLabel={gt("Archive finished runs")}
                 value={archiveRuns}
                 onValueChange={setArchiveRuns}
               />
@@ -1265,6 +1266,7 @@ function TaskForm({
                   display={Platform.OS === "ios" ? "spinner" : "default"}
                   onDismiss={() => setTimePickerOpen(false)}
                   onValueChange={(_, selected) => {
+                    if (Platform.OS === "android") setTimePickerOpen(false);
                     const timeOfDay = `${String(selected.getHours()).padStart(2, "0")}:${String(selected.getMinutes()).padStart(2, "0")}`;
                     setDraft((current) => ({
                       ...current,

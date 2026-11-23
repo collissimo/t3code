@@ -54,7 +54,11 @@ import { msg, T, useGT, useLocale, useMessages, Var } from "gt-react";
 import { m, type MessageResolver } from "../../i18n/messages";
 
 import { formatRelativeTime } from "../../timestampFormat";
-import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import {
+  useClientSettings,
+  useEnvironmentSettings,
+  useUpdateEnvironmentSettings,
+} from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import { providerInstanceEntriesFor } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/cloudLinkState";
@@ -198,6 +202,7 @@ const EMPTY_DRAFT: DraftState = {
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
+  savedThreadId: "",
   threadMode: "new_thread",
   workspaceMode: "worktree",
   baseRef: "",
@@ -798,6 +803,7 @@ function ScheduledTaskRow({
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
@@ -844,7 +850,15 @@ function ScheduledTaskRow({
       status={
         <div className="flex flex-wrap items-center gap-2">
           <span>
-            {scheduleLabel(task.schedule, timeZone, task.nextRunAt, messages, locale)} ·{" "}
+            {scheduleLabel(
+              task.schedule,
+              timestampFormat,
+              timeZone,
+              task.nextRunAt,
+              messages,
+              locale,
+            )}{" "}
+            ·{" "}
             {task.blockedByPolicy !== undefined ? (
               task.blockedByPolicy
             ) : !task.enabled ? (
@@ -1264,6 +1278,8 @@ function ScheduledTaskEditorDialog({
   return (
     <Dialog
       open
+      // A stray click outside would discard the unsaved draft; Escape and Cancel still close it.
+      disablePointerDismissal
       onOpenChange={(open) => {
         if (!open && !saving) onClose();
       }}
@@ -1687,6 +1703,7 @@ function ScheduledTaskEditorForm({
       schedule,
       projectId: selectedProjectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      ...(draft.threadId === "" && draft.savedThreadId !== "" ? { unbindThread: true } : {}),
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       workspaceStrategy,
       modelSelection,
@@ -1849,10 +1866,14 @@ function ScheduledTaskEditorForm({
           {draft.threadMode === "new_thread" ? (
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0 space-y-1">
-                <Label htmlFor="scheduled-task-archive-runs">Archive finished runs</Label>
+                <Label htmlFor="scheduled-task-archive-runs">
+                  <T>Archive finished runs</T>
+                </Label>
                 <p className="text-sm text-muted-foreground">
-                  A run's thread is archived once it completes, so it stays out of the sidebar.
-                  Failed runs stay visible.
+                  <T>
+                    A run's thread is archived once it completes, so it stays out of the sidebar.
+                    Failed runs stay visible.
+                  </T>
                 </p>
               </div>
               <Switch
