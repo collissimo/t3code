@@ -986,6 +986,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.deepStrictEqual(result.unpackedFiles, ["node_modules/native/addon.node"]);
         assert.isBelow(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
         assert.deepStrictEqual(secondAsar, firstAsar);
+
+        const compileCacheDir = path.join(fixture.packagedAppDir, "resources/server-compile-cache");
+        yield* fs.makeDirectory(compileCacheDir, { recursive: true });
+        for (const name of ["manifest.json", "0016a2bb", "0736d3e0"]) {
+          yield* fs.writeFileString(path.join(compileCacheDir, name), "cache");
+        }
+        const withCache = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+          fileLimit: result.fileCount,
+        });
+        assert.equal(withCache.fileCount, result.fileCount);
       }),
     ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
