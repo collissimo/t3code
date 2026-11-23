@@ -1062,8 +1062,10 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-// Fork: 110, not upstream's 80. Fork natives add 15 files and a native Windows build adds the server compile cache.
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 110;
+// Fork: 95, not upstream's 80, for 15 fork natives. Upstream cross-builds Windows without the
+// server compile cache, which grows with every server chunk, so the count leaves it out.
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 95;
+const WINDOWS_PAYLOAD_UNCOUNTED_DIR = "resources/server-compile-cache";
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
@@ -3204,6 +3206,7 @@ function collectUnpackedAsarFiles(
 const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const uncounted = path.join(root, ...WINDOWS_PAYLOAD_UNCOUNTED_DIR.split("/"));
   const pendingDirectories = [root];
   let count = 0;
 
@@ -3215,7 +3218,7 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
       const entryPath = path.join(directory, entry);
       const stat = yield* fs.stat(entryPath);
       if (stat.type === "Directory") {
-        pendingDirectories.push(entryPath);
+        if (entryPath !== uncounted) pendingDirectories.push(entryPath);
       } else if (stat.type === "File") {
         count += 1;
       }
