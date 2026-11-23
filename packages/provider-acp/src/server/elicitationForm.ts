@@ -203,18 +203,15 @@ export function parseElicitationForm(
     fields.set(id, parsed.field);
     parsedFields.push({ id, property, options: parsed.options });
   }
-  // An optional `<id>__other` text field (OMP's ask dialog) is the free-text answer to
-  // optional single choice `<id>`: ask them as one question and send custom text to the
-  // companion. Multi-select keeps both fields, since it can answer with options and text.
+  // Optional `<id>__other` or `<id>_other` text fields carry the free-text answer for
+  // optional single-choice `<id>`. Multi-select keeps both so options and text can combine.
   const companions = new Map<string, string>();
   for (const [id, field] of fields) {
-    const companionId = `${id}__other`;
-    if (
-      field.kind === "choice" &&
-      fields.get(companionId)?.kind === "text" &&
-      !required.has(id) &&
-      !required.has(companionId)
-    ) {
+    if (field.kind !== "choice" || required.has(id)) continue;
+    const companionId = [`${id}__other`, `${id}_other`].find(
+      (candidate) => fields.get(candidate)?.kind === "text" && !required.has(candidate),
+    );
+    if (companionId !== undefined) {
       companions.set(id, companionId);
     }
   }

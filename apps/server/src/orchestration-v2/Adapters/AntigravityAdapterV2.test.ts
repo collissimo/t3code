@@ -2097,3 +2097,145 @@ describe("AntigravityAdapterV2 session system prompt", () => {
       }).pipe(Effect.provide(layerSession)),
   );
 });
+
+describe("AntigravityAdapterV2 ask_question elicitation", () => {
+  it.live("emits one question per qN pair and routes typed answers back to qN_other over ACP", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const crypto = yield* SecureRandom.SecureRandom;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-ag-elicit-" });
+      const responseLog = path.join(logs, "responses.jsonl");
+      const instanceId = ProviderInstanceId.make("antigravity-elicit-test");
+      const requestedSchema = {
+        type: "object",
+        properties: {
+          q1: {
+            type: "string",
+            title: "Which light palette works best?",
+            oneOf: [
+              { const: "1", title: "(Recommended) Cool stone" },
+              { const: "2", title: "Warm mineral" },
+            ],
+          },
+          q1_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Which light palette works best?",
+          },
+          q2: {
+            type: "string",
+            title: "Which accent should be the default?",
+            oneOf: [
+              { const: "1", title: "Terracotta" },
+              { const: "2", title: "Botanical" },
+            ],
+          },
+          q2_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Which accent should be the default?",
+          },
+        },
+      };
+      const adapter = yield* makeAntigravityAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        makeRuntime: (input) =>
+          makeAntigravityAcpRuntime({
+            ...input,
+            childProcessSpawner,
+            spawn: {
+              command: process.execPath,
+              args: [mockAgentPath],
+              cwd: input.cwd,
+              env: {
+                T3_ACP_ANTIGRAVITY: "1",
+                T3_ACP_EMIT_ELICITATION: "1",
+                T3_ACP_ELICITATION_SCHEMA: JSON.stringify(requestedSchema),
+                T3_ACP_ELICITATION_RESPONSE_LOG_PATH: responseLog,
+              },
+            },
+          }).pipe(Effect.provideService(SecureRandom.SecureRandom, crypto)),
+        withProcess: (_stop, task) => task,
+        defaultModel: Effect.undefined,
+      });
+      const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-ag-elicit-ws-" });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: workspace,
+      });
+      const threadId = ThreadId.make("thread-antigravity-elicit");
+      const modelSelection = { instanceId, model: "gemini-test-low" } as const;
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-antigravity-elicit"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* session.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          modelSelection,
+          now,
+        }),
+      );
+      const first = yield* session.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.terminal" ||
+            (event.type === "turn_item.updated" && event.turnItem.type === "user_input_request"),
+        ),
+        Stream.runHead,
+      );
+      assert.isTrue(first._tag === "Some");
+      if (
+        first._tag !== "Some" ||
+        first.value.type !== "turn_item.updated" ||
+        first.value.turnItem.type !== "user_input_request"
+      ) {
+        assert.fail("expected user_input_request event");
+      }
+      assert.deepEqual(
+        first.value.turnItem.questions.map((question) => [
+          question.id,
+          question.question,
+          question.allowCustomAnswer,
+        ]),
+        [
+          ["q1", "Which light palette works best?", undefined],
+          ["q2", "Which accent should be the default?", undefined],
+        ],
+      );
+      yield* session.respondToRuntimeRequest({
+        requestId: first.value.turnItem.requestId,
+        answers: { q1: "1", q2: "Deep slate" },
+      });
+      yield* session.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+      );
+      const responses = (yield* fileSystem.readFileString(responseLog))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.deepEqual(responses, [
+        { action: "accept", content: { q1: "1", q2_other: "Deep slate" } },
+      ]);
+    }).pipe(Effect.provide(layerSession)),
+  );
+});

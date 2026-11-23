@@ -80,6 +80,32 @@ describe("parseElicitationForm", () => {
       q1__other: "Only on Fridays",
     });
 
+    // Single-underscore `<id>_other` companions (Antigravity's ask_question) fold the same way,
+    // while standalone text fields stay separate.
+    const singleUnderscore = parseElicitationForm(
+      {
+        type: "object",
+        properties: {
+          q1: ask("Which theme?", "Theme"),
+          q1_other: { type: "string", title: "Other" },
+          notes: { type: "string", title: "Additional notes" },
+        },
+      },
+      "Answer 2 questions",
+    );
+    assert(singleUnderscore !== undefined);
+    assert.deepStrictEqual(
+      singleUnderscore.questions.map((question) => [question.id, question.allowCustomAnswer]),
+      [
+        ["q1", undefined],
+        ["notes", undefined],
+      ],
+    );
+    assert.deepStrictEqual(singleUnderscore.content({ q1: "Solarized", notes: "Keep dark mode" }), {
+      q1_other: "Solarized",
+      notes: "Keep dark mode",
+    });
+
     // A multi-select answer can carry options and free text together, so both fields stay.
     const multi = parseElicitationForm(
       {
