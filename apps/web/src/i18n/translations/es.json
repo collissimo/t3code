@@ -498,7 +498,6 @@
   "bc24c300d53d61c5": "{host} no respondió en ninguna de las rutas guardadas.",
   "b0dd3cd876937ca8": "El perfil de conexión {connectionId} no está disponible.",
   "5ce46783e79ca9d1": "La credencial de conexión {connectionId} no está disponible.",
-  "0bda0cac7f5acc20": "El entorno conectado {actual} no coincide con {expected}.",
   "ea0d3e4e51d5706f": "La credencial del entorno no es válida.",
   "7283ebfd16d09677": "La credencial del entorno no concede el acceso necesario.",
   "d3e9a9cb543b4b7b": "El entorno rechazó la solicitud de autenticación.",
@@ -3636,8 +3635,6 @@
   "478e3b4551be4db3": "Mostrar texto extraído",
   "e7205ebfead1aafc": "Vista previa ampliada del vídeo",
   "1bda77e861bb472f": "Vista previa ampliada de la imagen",
-  "eebe5b17e3c19a1c": "Atrás, cerrar la vista previa del vídeo",
-  "58fd0009a6eb7258": "Atrás, cerrar la vista previa de la imagen",
   "47bae54b5f532ff3": "Elemento anterior",
   "fb9434aad2b5c0bb": "No se pudo cargar esta imagen.",
   "26aee5d4e97bfb28": "Imagen no disponible. Puede que el archivo se haya movido o eliminado.",
@@ -8820,7 +8817,6 @@
   "a9cdd8c7073be920": "Paleta de comandos: alternar",
   "4e0943e8c7a465d1": "Selector de archivos: alternar",
   "df5fdcdf26a6b52a": "Búsqueda en el proyecto: alternar",
-  "a8ff6d33b060736f": "Uso: abrir",
   "a513d51b71b95674": "Tema: seleccionar",
   "1ffd8427452372e1": "Apariencia: alternar",
   "3a3bb4a7551a87cc": "Editor de temas: alternar",
@@ -11544,10 +11540,7 @@
       "v": "v"
     }
   ],
-  "f54364b854a07918": "No hay hubs configurados.",
   "4cf6a373a7535324": "{name} · Deshabilitado",
-  "1d1e9cda847bd398": "La clave de gestión del hub se elimina de este servidor. Sus cuentas salen de la vista Límites; el hub en sí no se toca. Vuelve a añadirlo con la URL y la clave para recuperarlas.",
-  "c9bee4f93481b77a": "Quitar hub",
   "0424112d5a0ecd71": "Automático",
   "3f0e1b77e45d53a9": "Toca para alternar, mantén para hablar",
   "45928549c050a1b4": "Mantener",
@@ -12815,5 +12808,189 @@
   "27d76249d09eb69f": "Guía de revisión lista",
   "faa3bb26abb39c93": "Falló la guía de revisión",
   "b7df38b7d8792d78": "Abrir guía",
-  "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión"
+  "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión",
+  "b39d1428ec8b23f5": "Esta dirección ahora ejecuta otra instalación de T3 Code ({actual}, no {expected}). Elimina esta conexión y vuelve a añadirla.",
+  "90dfebe26eb86b2d": "Opciones de selección de la página",
+  "70bdebaa3d291d3b": "Hilo no disponible",
+  "a351ebbdcf1a3f7a": "Este hilo está en un entorno al que esta app no está conectada.",
+  "fb633d54edaeb4b1": "Cerrar la vista previa del vídeo",
+  "62d0c453f5803180": "Cerrar la vista previa de la imagen",
+  "796b81c4875c4feb": [
+    "La app ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " necesita un servidor de ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    " más reciente en este entorno. Actualiza el servidor para usarla."
+  ],
+  "76cf478e5674fd12": "{count, plural, one {{count} coincidencia} other {{count} coincidencias}}",
+  "65300794c1edb929": "Token de portador (opcional)",
+  "0c026221dcd2820b": "Añadir una fuente de cuotas HTTP",
+  "d185c750156b2121": [
+    "Consulta las cuotas desde un punto de conexión en ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "."
+  ],
+  "2324770ba91371ac": "URL del punto de conexión",
+  "e4e5b75bba51396c": "Token de portador (opcional)",
+  "0ca6fd2b8fcab2c3": "Uso: Mostrar u ocultar",
+  "39f64d971ba424b5": "No hay fuentes de uso configuradas.",
+  "dbd877abdc2c7c81": "Fuente de cuotas HTTP",
+  "c792e744936dbe1b": "Añadir fuente HTTP",
+  "4032a03ee5301037": "La conexión guardada y sus credenciales se eliminan de este entorno.",
+  "933dabf0700708af": "Cuántas ejecuciones omitidas conserva cada flujo de trabajo en su historial. Las ejecuciones omitidas más antiguas se eliminan; las que hicieron algo se conservan siempre.",
+  "f172d7e5deb24f75": "Restablecer las ejecuciones omitidas conservadas al valor predeterminado",
+  "ba94015389f327bc": "Ejecuciones omitidas conservadas",
+  "4b2669dcdb7d3776": "workflow flujo historial retención eliminar antiguas ejecuciones omitidas webhook history retention skipped runs",
+  "353b08f4363dbb2c": "Pendiente",
+  "374dac09151d4578": "Pendiente",
+  "a8f30f631e2b010e": "Esperando para sincronizar con su entorno",
+  "e65649675cb4cbaa": "desactivado",
+  "a1e7c08d9ef315c7": "aún cargando",
+  "a4579e548b768663": "Mostrar barra lateral",
+  "0e34c3076c08feb2": [
+    {
+      "t": "span",
+      "i": 1,
+      "c": [
+        "↻ +",
+        {
+          "i": 2,
+          "k": "_gt_value_2",
+          "v": "v"
+        },
+        "%"
+      ]
+    },
+    " ",
+    "en ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    }
+  ],
+  "45a94c724845ec1d": "Otras",
+  "8eeb9cb07d7c59e1": "Tipo de pregunta",
+  "e4d1316c85ed7066": "No hay preguntas de este tipo esperándote.",
+  "e2131cbec8accfe3": "Todos los tipos",
+  "3b0f1659172107e4": "Todos los tipos",
+  "4a18481bea4b4ad5": "Nuevo dispositivo conectado a {environmentLabel}",
+  "4144ab6aa487528a": "{device} se conectó a través de {product}. ¿No fuiste tú? Revísalo.",
+  "a10cfdb27152c757": "{count, plural, one {{count} dispositivo se conectó} other {{count} dispositivos se conectaron}} a través de {product}. ¿No fuiste tú? Revísalos.",
+  "e0856d6a402ad821": "La política de {organization} no permite comandos de diseño de worktrees de proyectos.",
+  "206811f6f441bfc7": "Este proyecto prepara los worktrees con su propio comando, que nadie ha aprobado tal como está escrito ahora. Esta conexión no puede aprobarlo: apruébalo desde un cliente que pueda usar el terminal.",
+  "b8087c9a70c26da9": "No se pudo aprobar el comando de diseño de worktrees.",
+  "49eda70cfd56e621": "Se ejecuta cuando empieza un hilo en un worktree y cuando se restaura su carpeta",
+  "188ccaa1199f5611": "Se ejecuta cuando se elimina el worktree de un hilo",
+  "7e8476e7306acabe": "¿Permitir que este proyecto ejecute sus comandos de worktree?",
+  "8e11914556fd8b13": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " prepara los hilos en worktrees con sus propios comandos de ",
+    {
+      "t": "code",
+      "i": 2,
+      "c": "t3.json"
+    },
+    ". Se ejecutan en la máquina de este entorno con tus permisos, fuera de cualquier sandbox de agente. Se te volverá a preguntar cada vez que cambie su texto."
+  ],
+  "46807acd02a4ff72": "Aprobar y continuar",
+  "a9cb97fca6a6576b": "Comando de creación",
+  "90f45a354884ccdd": "Comando de eliminación",
+  "78e308ada516928b": "No se pudo aprobar el comando",
+  "a0c772d32a233da6": "No se pudo revocar la aprobación",
+  "0cdc8cdbed3e5eae": "Diseño de worktrees",
+  "c17b25519e2b194e": "No se pudieron cargar los comandos de diseño de worktrees",
+  "5ccd5614c65f8d1f": "Revocar la aprobación del comando {kind}",
+  "80c3794a5fa12f3a": "Aprobar el comando {kind}",
+  "f206891e124c77b0": [
+    "El ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "t3.json"
+    },
+    " de este proyecto prepara los hilos en worktrees con sus propios comandos. Se ejecutan en la máquina de este entorno con tus permisos y solo tal como se aprobaron aquí: un comando cuyo texto cambia necesita aprobación de nuevo."
+  ],
+  "f6a91589456cca50": "Aprobado",
+  "c92657bb7f2293ff": "Necesita aprobación",
+  "f1e5c1be1ac92361": "Aprobar",
+  "fcb5f3c4d4753326": "Esta conexión no puede aprobar comandos. Usa un cliente que pueda usar el terminal.",
+  "4e96712d839ccbff": "{who} dijo {choice}",
+  "19097cfb8f5a79cf": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " dijo",
+    " ",
+    {
+      "t": "span",
+      "i": 2,
+      "c": {
+        "i": 3,
+        "k": "_gt_value_3",
+        "v": "v"
+      }
+    },
+    "."
+  ],
+  "e7bbf693910057bf": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " dijo",
+    " ",
+    {
+      "t": "span",
+      "i": 2,
+      "c": {
+        "i": 3,
+        "k": "_gt_value_3",
+        "v": "v"
+      }
+    },
+    ": ",
+    {
+      "i": 4,
+      "k": "_gt_value_4",
+      "v": "v"
+    }
+  ],
+  "3759768c5d342c22": [
+    "respondida",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "e114d37b32ab0dc7": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " necesita un motivo."
+  ],
+  "91aadfc843c600de": "Verificar cuenta de Google"
 }

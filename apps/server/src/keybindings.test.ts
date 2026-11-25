@@ -52,6 +52,17 @@ const readKeybindingsConfig = (configPath: string) =>
     return yield* decodeKeybindingsConfigJson(rawConfig);
   });
 
+function scriptBindingsAtChatNewCutoff(hiddenChatNewBindings: 0 | 1) {
+  const defaults = SharedKeybindings.DEFAULT_RESOLVED_KEYBINDINGS;
+  const firstChatNew = defaults.findIndex((binding) => binding.command === "chat.new");
+  assert.isAtLeast(firstChatNew, 0);
+  const visibleDefaults = defaults.length - firstChatNew - hiddenChatNewBindings;
+  return Array.from({ length: MAX_KEYBINDINGS_COUNT - visibleDefaults }, (_, index) => ({
+    key: "mod+alt+f1",
+    command: `script.filler-${index}.run` as const,
+  }));
+}
+
 it.layer(NodeServices.layer)("keybindings", (it) => {
   it.effect("parses shortcuts including plus key", () =>
     Effect.sync(() => {
@@ -531,24 +542,11 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
-  // The resolved list keeps the last MAX entries of defaults + config, so fillers push early defaults out.
-  const chatNewModNIndex = SharedKeybindings.DEFAULT_KEYBINDINGS.findIndex(
-    (rule) => rule.command === "chat.new" && rule.key === "mod+n",
-  );
-  const fillersHidingDefaultsBefore = (index: number) =>
-    MAX_KEYBINDINGS_COUNT - SharedKeybindings.DEFAULT_KEYBINDINGS.length + index;
-
   it.effect("preserves sibling shortcuts only if visible within the binding limit", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
       const keybindings = yield* Keybindings.Keybindings;
-      yield* writeKeybindingsConfig(
-        keybindingsConfigPath,
-        Array.from({ length: fillersHidingDefaultsBefore(chatNewModNIndex + 1) }, (_, index) => ({
-          key: "mod+alt+f1",
-          command: `script.filler-${index}.run` as const,
-        })),
-      );
+      yield* writeKeybindingsConfig(keybindingsConfigPath, scriptBindingsAtChatNewCutoff(1));
 
       const target = { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" } as const;
       const local = { ...target, key: "mod+shift+n", command: "chat.newLocal" } as const;
@@ -575,13 +573,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       Effect.gen(function* () {
         const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
         const keybindings = yield* Keybindings.Keybindings;
-        yield* writeKeybindingsConfig(
-          keybindingsConfigPath,
-          Array.from({ length: fillersHidingDefaultsBefore(chatNewModNIndex) }, (_, index) => ({
-            key: "mod+alt+f1",
-            command: `script.filler-${index}.run` as const,
-          })),
-        );
+        yield* writeKeybindingsConfig(keybindingsConfigPath, scriptBindingsAtChatNewCutoff(0));
 
         const target = { key: "mod+n", command: "chat.new", when: "!terminalFocus" } as const;
         const sibling = { ...target, key: "mod+shift+o" };

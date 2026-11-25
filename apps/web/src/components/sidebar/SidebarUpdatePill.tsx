@@ -446,6 +446,7 @@ function SidebarUpdateControl() {
       <SidebarMenuItem className="@container/sidebar-update ml-auto flex min-w-48 flex-1">
         <SidebarUpdateCapsule
           run={run}
+          current={everything.machines}
           local={local}
           icon={statusIcon}
           {...(run.localVersion === null && action === "install" && window.desktopBridge
