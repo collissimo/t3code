@@ -30,6 +30,7 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -68,6 +69,7 @@ import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { DispatchModeLimit } from "./DispatchModeLimit.ts";
+import { AI_BRANCH_NAME_GRACE, instantBranchName } from "./instantBranchName.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import { isWithinRoot } from "../workspace/KnownWorkspaces.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
@@ -634,6 +636,8 @@ const make = Effect.gen(function* () {
     // Stop background renames before forgetting worktrees; completed renames record them again.
     let branchRename: Fiber.Fiber<unknown> | null = null;
     let stopBranchName: Effect.Effect<void> = Effect.void;
+    // Fork: done once the agent could start but for the branch name (instantBranchName.ts).
+    const agentStartable = yield* Deferred.make<void>();
     if (input.workspaceStrategy.type === "worktree") {
       yield* setupTracker.begin({
         threadId,
@@ -985,10 +989,29 @@ const make = Effect.gen(function* () {
       ) {
         const oldBranch = branch;
         const worktreeCwd = worktreePath;
-        const generatedName =
+        const aiName =
           branchName === null
             ? generateBranchNameFor(worktreeCwd, initialMessage)
             : Fiber.join(branchName);
+        // Fork: the agent waits for the AI name at most AI_BRANCH_NAME_GRACE after the worktree
+        // exists, or until a blocking setup script ends; then the prompt's first words name it.
+        const promptName = Effect.sleep(AI_BRANCH_NAME_GRACE).pipe(
+          Effect.andThen(Deferred.await(agentStartable)),
+          Effect.andThen(serverSettings.getSettings),
+          Effect.map((all) => resolveProjectSettings(all, input.projectId).settings),
+          Effect.map((settings) => ({
+            branch: instantBranchName(initialMessage.text, {
+              mode: settings.branchNamingMode,
+              prefix: settings.branchNamePrefix,
+              instructions: settings.branchNameInstructions,
+            }),
+            exactName: false,
+          })),
+        );
+        const generatedName = Effect.raceFirst(aiName, promptName).pipe(
+          // Interrupted after the race, so the race never sees the interruption as the AI's answer.
+          Effect.ensuring(branchName === null ? Effect.void : Fiber.interrupt(branchName)),
+        );
         branchRename = yield* generatedName.pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
             Effect.suspend(
@@ -1179,6 +1202,7 @@ const make = Effect.gen(function* () {
         yield* setupTracker.stageStatus(threadId, "setup-script", "skipped");
       }
       // The agent must start on the branch name the thread will show.
+      yield* Deferred.succeed(agentStartable, undefined);
       if (branchRename !== null) yield* Fiber.join(branchRename);
       yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");

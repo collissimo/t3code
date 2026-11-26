@@ -3839,39 +3839,96 @@ it.effect("tells the thread when its worktree branch could not be renamed", () =
   }),
 );
 
-it.effect("starts the agent on the temporary branch when branch naming hangs", () =>
+// Fork: the agent waits for the AI branch name only briefly (instantBranchName.ts).
+it.effect("names the branch from the prompt when the AI branch name is late", () =>
   Effect.gen(function* () {
     const branchNameStarted = yield* Deferred.make<void>();
+    const branchNameInterrupted = yield* Deferred.make<void>();
     const harness = makeHarness({
       // A rate-limited provider retries until the CLI's own timeout, minutes later.
       generateBranchName: () =>
-        Deferred.succeed(branchNameStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        Deferred.succeed(branchNameStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(branchNameInterrupted, undefined)),
+        ),
     });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
-      const threads = yield* ThreadManagement.ThreadManagementService;
       const launched = yield* launches.launch(
         launchInput({
-          command: "launch:rename-hangs",
-          thread: "thread:rename-hangs",
-          message: "Start",
+          command: "launch:rename-late",
+          thread: "thread:rename-late",
+          message: "[STT] Fix the parser/lexer crash on empty input, please",
           workspace: { type: "worktree", baseRef: "main" },
         }),
       );
       yield* Deferred.await(branchNameStarted);
-      yield* TestClock.adjust("20 seconds");
+      // The rename waits once setup has been looked at.
+      yield* tracker.stream(launched.threadId).pipe(
+        Stream.filter(
+          (snapshot) =>
+            snapshot?.stages.some(
+              (stage) => stage.id === "setup-script" && stage.status === "skipped",
+            ) === true,
+        ),
+        Stream.runHead,
+      );
+      yield* TestClock.adjust("2 seconds");
       yield* tracker.stream(launched.threadId).pipe(
         Stream.filter((snapshot) => snapshot?.phase === "done"),
         Stream.runHead,
       );
-      assert.equal(harness.renameBranch.mock.calls.length, 0);
-      const projection = yield* threads.getThreadProjection(launched.threadId);
-      const notice = projection.turnItems.find((item) => item.type === "system_notice");
-      assert.include(
-        notice?.type === "system_notice" ? notice.message : "",
-        `stays ${projection.thread.branch}. Text generation failed in generateBranchName: Timed out after 20 seconds.`,
+      assert.equal(
+        harness.renameBranch.mock.calls[0]?.[0].newBranch,
+        "t3/fix-the-parser-lexer-crash-on",
       );
+      yield* Deferred.await(branchNameInterrupted);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("keeps waiting for the AI branch name while a blocking setup script runs", () =>
+  Effect.gen(function* () {
+    const setupEntered = yield* Deferred.make<void>();
+    const setupDone = yield* Deferred.make<{ exitCode: number; durationMs: number }>();
+    const allowBranchName = yield* Deferred.make<void>();
+    const renamedTo = yield* Deferred.make<string>();
+    const harness = makeHarness({
+      runSetup: () =>
+        Deferred.succeed(setupEntered, undefined).pipe(
+          Effect.as({
+            status: "started" as const,
+            async: false,
+            scriptId: "setup",
+            scriptName: "Setup",
+            scriptCommand: "vp install",
+            terminalId: "setup",
+            cwd: "/repo-worktrees/feature",
+            completion: Deferred.await(setupDone),
+          }),
+        ),
+      generateBranchName: () =>
+        Deferred.await(allowBranchName).pipe(Effect.as({ branch: "generated-branch" })),
+      renameBranch: (input) =>
+        Deferred.succeed(renamedTo, input.newBranch).pipe(Effect.as({ branch: input.newBranch })),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch(
+        launchInput({
+          command: "launch:rename-during-setup",
+          thread: "thread:rename-during-setup",
+          message: "Start",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      // The rename waits once setup has started; past the grace period, setup still holds the agent.
+      yield* Deferred.await(setupEntered);
+      yield* TestClock.adjust("5 seconds");
+      yield* Deferred.succeed(allowBranchName, undefined);
+      assert.equal(yield* Deferred.await(renamedTo), "generated-branch");
+      yield* Deferred.succeed(setupDone, { exitCode: 0, durationMs: 1 });
     }).pipe(Effect.provide(harness.layer));
   }),
 );

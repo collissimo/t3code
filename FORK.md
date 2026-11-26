@@ -253,3 +253,16 @@ epochs per thread). Nothing lives in SQLite, so the fork adds no database migrat
 Code: `apps/server/src/sim/`, `apps/server/src/mcp/toolkits/sim/`,
 `packages/contracts/src/settings.ts` (`sim`),
 `packages/provider-core/src/server/orchestrationInstructions.ts` (ACP thread instructions).
+
+### Branch name without waiting
+
+Upstream holds a new worktree thread's agent until the AI has named its branch (a Codex or Claude
+CLI call, 4 to 8 seconds measured, which made a worktree take about 9 seconds). The fork waits for
+that name at most 2 seconds after the worktree exists, or until a blocking setup script
+(`async: false`) ends if that takes longer, since the agent cannot start before then. A name that is
+not back by then is replaced by the first six words of the prompt, without the `[STT]` marker,
+under the usual prefix (`t3/fix-the-parser-crash-on-empty`); the AI call is stopped. An AI call that
+fails before the deadline still leaves the temporary name and a notice, as upstream does.
+
+Code: `apps/server/src/orchestration-v2/instantBranchName.ts`, the race in
+`ThreadLaunchService.ts` (`agentStartable`).
