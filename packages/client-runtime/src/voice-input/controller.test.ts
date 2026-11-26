@@ -267,6 +267,8 @@ describe("resolveTranscriptCommit", () => {
       "修正キャッシュ[STT] テストも",
     ],
     ["spaceless Thai", "โลก", 0, "สวัสดี", "th-TH", "[STT] สวัสดีโลก"],
+    ["spaceless Mandarin after the caret", "你好", 2, "世界", "cmn-Hans-CN", "你好[STT] 世界"],
+    ["spaceless Mandarin before the caret", "世界", 0, "你好", "cmn-Hans-CN", "[STT] 你好世界"],
   ])(
     "inserts at a caret with the recorded language's word spacing: %s",
     (_case, text, caret, spoken, locale, expected) => {
@@ -298,26 +300,31 @@ describe("resolveTranscriptCommit", () => {
       "at the start of the selection",
       { start: 6, end: 11 },
       "hello [cite]world",
-      "hello [cite]world new text",
+      "hello [cite]world [STT] new text",
     ],
     [
       "inside the selection",
       { start: 6, end: 11 },
       "hello wo[cite]rld",
-      "hello wo[cite]rld new text",
+      "hello wo[cite]rld [STT] new text",
     ],
-    ["at the caret", { start: 6, end: 6 }, "hello [cite] world", "hello [cite] new text world"],
+    [
+      "at the caret",
+      { start: 6, end: 6 },
+      "hello [cite] world",
+      "hello [cite] [STT] new text world",
+    ],
     [
       "that repeats the selection",
       { start: 0, end: 5 },
       "hello there hello world",
-      "hello there hello new text world",
+      "hello there hello [STT] new text world",
     ],
     [
       "that repeats the selection next to it",
       { start: 0, end: 5 },
       "hello hello world",
-      "hello hello new text world",
+      "hello hello [STT] new text world",
     ],
   ])("keeps text inserted %s while recording", (_, selection, current, expected) => {
     const captured = draft({ text: "hello world", selection });
@@ -339,7 +346,7 @@ describe("resolveTranscriptCommit", () => {
       "spoken",
       "en-US",
     );
-    expect(result).toMatchObject({ kind: "commit", text: `${current} spoken` });
+    expect(result).toMatchObject({ kind: "commit", text: `${current} [STT] spoken` });
   });
 
   it("keeps surrogate pairs whole when an emoji changed while recording", () => {
@@ -350,7 +357,7 @@ describe("resolveTranscriptCommit", () => {
       "hello",
       "en-US",
     );
-    expect(result).toMatchObject({ kind: "commit", text: "🤔hello" });
+    expect(result).toMatchObject({ kind: "commit", text: "🤔[STT] hello" });
   });
 
   it("does not insert into a missing draft or another owner's draft", () => {
