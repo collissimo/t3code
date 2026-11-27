@@ -31,6 +31,7 @@ import {
   classifyHarnessPath,
   expandHarnessFile,
   expandHomeString,
+  localIsoDay,
   resolveSimPaths,
 } from "./SimContracts.ts";
 import * as SimStore from "./SimStore.ts";
@@ -50,13 +51,16 @@ const TERMINAL_RUN_STATUSES = new Set(["completed", "interrupted", "failed", "ca
 const REVIEW_TERM =
   /(?<![\p{L}\p{N}_])(?:review\p{L}*|re-?check\p{L}*|audit\p{L}*|verif\p{L}*|grad(?:e|ed|es|er|ers|ing)|critics?|critiques?|kritik\p{L}*|fact-?check\p{L}*|(?:über|gegen|nach)?(?:prüf|pruef)\p{L}*)(?![\p{L}\p{N}_])/iu;
 const CODE_CUE =
-  /\b(?:code(?:base)?|diffs?|PRs?|pull requests?|branch(?:es)?|commits?|patch(?:es)?|repo(?:s|sitory|sitories)?|harness|SIM|adversarial)\b/i;
+  /(?<![\p{L}\p{N}_])(?:code(?:base)?|diffs?|PRs?|pull requests?|branch(?:es)?|commits?|patch(?:es)?|repo(?:s|sitory|sitories)?|zweig(?:e|en)?|harness|SIM|adversarial)(?![\p{L}\p{N}_])/iu;
 // Any research prompt asks for "findings" or a "verdict", so these only count in a title.
 const VERDICT_CUE = /\b(?:findings|verdict)\b/i;
 const REVIEW_ROLE =
   /\b(?:independent grader|round[- ]?\d+ (?:re-?)?review|check(?:ing)? (?:[\w-]+ ){0,3}(?:diffs?|patch(?:es)?|pull request|PR))\b/i;
-const IMPLEMENTATION_TITLE =
-  /^\s*(?:please\s+)?(?:implement|build|add|create|fix|refactor|write|update|migrate|remove|delete|rename|port|wire|explore|investigate|debug|configure|set ?up|document)\b/i;
+// A title or task that opens by asking to build, change or explore something is not a review.
+const IMPLEMENTATION_LEAD =
+  /^\s*(?:please\s+)?(?:implement|build|add|create|fix|refactor|write|update|migrate|remove|delete|rename|port|wire|explore|investigate|debug|configure|set ?up|document)(?![\w-])/i;
+const REVIEW_LEAD =
+  /^\s*(?:please\s+)?(?:review|audit|verify|grade|re-?check|critique|fact-?check|(?:über|gegen|nach)?prüfe|kontrolliere)(?![\p{L}\p{N}_-])/iu;
 const REVIEW_PROMPT_OPENING = 600;
 const CLAUDE_DRIVER = "claudeAgent";
 
@@ -73,29 +77,25 @@ function firstSighting(seen: Map<string, true>, key: string): boolean {
   return true;
 }
 
-const firstSentence = (text: string) => {
-  const head = text.trim().slice(0, REVIEW_PROMPT_OPENING);
-  const end = head.search(/[.!?\n](?:\s|$)/);
-  return end === -1 ? head : head.slice(0, end + 1);
-};
-
 /** Whether a delegated task asks for a review of code or the harness, by its role, title and opening. */
 export function isCodeReviewTask(title: string, prompt = ""): boolean {
   const { role, task } = splitTaskPrompt(prompt);
   if (role === "review") return true;
-  if (role === "implementation" || role === "test" || IMPLEMENTATION_TITLE.test(title))
-    return false;
-  // Prompts are full of "verify with the tests" and "Prüfpunkte" boilerplate, so a review term
-  // counts in the title or the first sentence only; code must show in the title or the opening.
-  const opening = `${title}\n${task.slice(0, REVIEW_PROMPT_OPENING)}`;
-  if (REVIEW_ROLE.test(opening)) return true;
-  if (REVIEW_TERM.test(title)) return CODE_CUE.test(opening) || VERDICT_CUE.test(title);
-  return REVIEW_TERM.test(firstSentence(task)) && CODE_CUE.test(opening);
+  if (role === "implementation" || role === "test") return false;
+  const opening = task.slice(0, REVIEW_PROMPT_OPENING);
+  const sentences = opening.split(/(?<=[.!?])\s+|\n+/);
+  if (IMPLEMENTATION_LEAD.test(title) || IMPLEMENTATION_LEAD.test(sentences[0] ?? "")) return false;
+  const text = `${title}\n${opening}`;
+  if (REVIEW_ROLE.test(text)) return true;
+  if (REVIEW_TERM.test(title)) return CODE_CUE.test(text) || VERDICT_CUE.test(title);
+  // Prompts are full of "verify with the tests" and "Prüfpunkte" boilerplate, so in the prompt a
+  // review term counts in the first sentence, or as the verb a later sentence opens with.
+  return (
+    CODE_CUE.test(text) &&
+    (REVIEW_TERM.test(sentences[0] ?? "") ||
+      sentences.some((sentence) => REVIEW_LEAD.test(sentence)))
+  );
 }
-
-/** Calendar day in the server's zone, matching how standalone sim.mjs stamps `day` and `round`. */
-const localDay = (at: DateTime.DateTime) =>
-  DateTime.formatIsoDate(DateTime.setZone(at, DateTime.zoneMakeLocal()));
 
 interface ShellWord {
   readonly kind: "word";
@@ -199,9 +199,9 @@ const VALUE_OPTIONS = new Map([
 const WRAPPER_VALUE_OPTIONS = new Map([
   [
     "sudo",
-    /^(?:-[a-zA-Z]*[CghprtUu]|--(?:chdir|close-from|group|host|prompt|role|type|other-user|user))$/,
+    /^(?:-(?:(?![CDghpRrtUu])[a-zA-Z])*[CDghpRrtUu]|--(?:chdir|chroot|close-from|group|host|prompt|role|type|other-user|user))$/,
   ],
-  ["env", /^(?:-[a-zA-Z]*[CSu]|--(?:chdir|split-string|unset))$/],
+  ["env", /^(?:-(?:(?![CSu])[a-zA-Z])*[CSu]|--(?:chdir|split-string|unset))$/],
   ["exec", /^-a$/],
 ]);
 const TARGET_DIR_OPTION = /^(?:--target-directory(?:=|$)|-(?:(?![gmoSt])[a-zA-Z])*t)(.*)$/;
@@ -243,13 +243,15 @@ function targetDirectory(args: ReadonlyArray<ShellWord>): ShellWord | undefined 
 
 /** Combine a directory destination with each source operand's basename so file classifiers see the written file. */
 function joinTargetDirectory(
+  name: string,
   directory: ShellWord,
   sources: ReadonlyArray<ShellWord>,
 ): Array<ShellWord> {
-  if (sources.length === 0) return [directory];
   const joined: Array<ShellWord> = [];
   for (const source of sources) {
-    if (source.dynamic) continue;
+    // A glob, or rsync's `dir/` (which copies the contents), names no single file to join.
+    if (source.dynamic || /[*?[]/.test(source.value)) continue;
+    if (name === "rsync" && source.value.endsWith("/")) continue;
     const base = NodePath.posix.basename(source.value.replace(/\/+$/, ""));
     if (!base || base === "." || base === "..") continue;
     joined.push({
@@ -275,7 +277,7 @@ function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> 
       ? targetDirectory(args)
       : undefined;
   if (directory) {
-    const written = joinTargetDirectory(directory, operands);
+    const written = joinTargetDirectory(name, directory, operands);
     return name === "mv" ? [...operands, ...written] : written;
   }
   if (
@@ -284,7 +286,7 @@ function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> 
     operands[operands.length - 1]!.value.endsWith("/")
   ) {
     const sources = operands.slice(0, -1);
-    const written = joinTargetDirectory(operands[operands.length - 1]!, sources);
+    const written = joinTargetDirectory(name, operands[operands.length - 1]!, sources);
     return name === "mv" ? [...sources, ...written] : written;
   }
   if (ALL_ARG_WRITERS.has(name)) return operands;
@@ -385,11 +387,15 @@ export function detectShellWriteTargets(command: string, initialCwd = ""): Array
   }> = [];
   let cwd: string | null = initialCwd;
   let deferredCwd: string | null | undefined;
+  let deferredDepth = 0;
+  let braceDepth = 0;
   let dirStack: Array<string | null> = [];
   let words: Array<ShellWord> = [];
   let redirected: Array<ShellWord> = [];
   let previousOp = ";";
   const flush = (nextOp: string) => {
+    if (words[0]?.value === "{") braceDepth += 1;
+    else if (words[0]?.value === "}") braceDepth = Math.max(0, braceDepth - 1);
     for (const word of [...redirected, ...commandWriteTargets(words)]) {
       const path = word.dynamic ? null : resolveShellPath(cwd, word.value);
       if (path !== null && !DEVICE_TARGET.test(path) && !BACKUP_TARGET.test(path))
@@ -400,15 +406,21 @@ export function detectShellWriteTargets(command: string, initialCwd = ""): Array
     if (previousOp !== "|" && previousOp !== "||" && nextOp !== "|" && nextOp !== "&") {
       const nextCwd = directoryAfter(cwd, dirStack, words);
       if (nextOp === "||") {
-        if (nextCwd !== cwd) deferredCwd = nextCwd;
+        if (nextCwd !== cwd) {
+          deferredCwd = nextCwd;
+          deferredDepth = braceDepth;
+        }
       } else {
         cwd = nextCwd;
       }
     }
+    // The fallback runs to the end of its pipeline or `{ … }` group.
     if (
       deferredCwd !== undefined &&
       nextOp !== "||" &&
+      nextOp !== "|" &&
       nextOp !== "(" &&
+      braceDepth <= deferredDepth &&
       !(nextOp === "\n" && words.length === 0)
     ) {
       cwd = deferredCwd;
@@ -568,12 +580,13 @@ const make = Effect.gen(function* () {
     const authors = new Set([`t3:${event.threadId}`]);
     const native = claudeSession.get(event.threadId);
     if (native) authors.add(`cc:${native}`);
-    const days = new Set([localDay(run.requestedAt), localDay(event.occurredAt)]);
+    const days = new Set([localIsoDay(run.requestedAt), localIsoDay(event.occurredAt)]);
     const recordedToday = new Set<string>();
     for (const problem of snapshot?.state.problems ?? []) {
       for (const attempt of problem.attempts) {
         const byCaller =
-          authors.has(attempt.by) || (attempt.also !== undefined && authors.has(attempt.also));
+          !attempt.retracted &&
+          (authors.has(attempt.by) || (attempt.also !== undefined && authors.has(attempt.also)));
         if (byCaller && days.has(attempt.recorded?.day ?? attempt.round)) {
           for (const file of attempt.files) recordedToday.add(file);
         }

@@ -256,7 +256,7 @@ epochs per thread). Nothing lives in SQLite, so the fork adds no database migrat
   on `sim.lock`. A `misfired` outcome withholds a rule only in the domain it was seen in, and the
   guide lists the rules it withheld. The audit treats threads that agents spawned as agents' work
   (no correction flags) and counts a delegated task as a review by its `delegate_task` role, then
-  its title.
+  its title and the sentences that open its prompt.
 
 Code: `apps/server/src/sim/`, `apps/server/src/mcp/toolkits/sim/`,
 `packages/contracts/src/settings.ts` (`sim`),

@@ -159,6 +159,17 @@ describe("searchProblemsRanked", () => {
     assert.strictEqual(searchProblemsRanked(many, "status:live").length, 25);
   });
 
+  it("finds by status:nolive only entries without any live rule", () => {
+    const state = simState([
+      problem("L", "Partly live", [attempt("A1"), attempt("A2", { live: false })]),
+      problem("N", "Retired", [attempt("A3", { live: false })]),
+    ]);
+    assert.deepStrictEqual(
+      searchProblemsRanked(state, "status:nolive").map((hit) => hit.problem.id),
+      ["N"],
+    );
+  });
+
   it("marks a query that matches stems only as stemmed, and exact words as exact", () => {
     assert.strictEqual(searchProblemsRanked(search, "hooking timeout")[0]?.matchedBy, "stemmed");
     assert.strictEqual(searchProblemsRanked(search, "hooks timeout")[0]?.matchedBy, "exact");

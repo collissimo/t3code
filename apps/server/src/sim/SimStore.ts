@@ -34,6 +34,7 @@ import {
   expandHarnessFile,
   expandHomeString,
   isPathWithinRoot,
+  localIsoDay,
   ownReport,
   pluralize as count,
   settlesFix,
@@ -120,11 +121,7 @@ const asData = (value: unknown): Data =>
 /** Root causes count as the same text when only case, spacing or a final period differ. */
 const sameName = (name: unknown) => squash(name).replace(/[.]+$/, "").toLowerCase();
 
-export function today(): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
+export const today = () => localIsoDay(Date.now());
 
 function isDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;

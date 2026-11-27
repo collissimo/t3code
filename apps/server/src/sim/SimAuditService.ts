@@ -9,10 +9,11 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { delegatedTaskPrefix } from "../mcp/threadAccess.ts";
+import { delegatedTaskPrefix } from "../mcp/delegatedTaskModes.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   DAY_MS,
+  SIM_MAX_INSPECT_LINES,
   SIM_UNKNOWN,
   SimAuditService,
   SimService,
@@ -20,6 +21,7 @@ import {
   bare,
   classifyHarnessPath,
   clipText,
+  localIsoDay,
   type SimAuditOptions,
   type SimAuditReport,
   type SimCallerContext,
@@ -43,7 +45,6 @@ const DEFAULT_LIMIT = 25;
 const THREAD_LIMIT = 2_000;
 const CHUNK = 400;
 const INSPECT_LINES = 200;
-const MAX_INSPECT_LINES = 500;
 const MAX_FORK_HOPS = 16;
 const AUDIT_MARKER = "[SIM-AUDIT]";
 
@@ -207,12 +208,6 @@ function parseTranscript(
   }
   const users: Array<{ turn: number; ts: string | null; text: string }> = [];
   const edits = new Map<string, string | null>();
-  const noteEdit = (file: string, ts: string | undefined) => {
-    const prev = edits.get(file);
-    if (prev === undefined || (ts !== undefined && (prev === null || ts > prev))) {
-      edits.set(file, ts ?? null);
-    }
-  };
   const models = new Map<string, number>();
   let cwd: string | null = null;
   let lastTs: string | null = null;
@@ -245,13 +240,13 @@ function parseTranscript(
           const input = record(block.input);
           if (["Write", "Edit", "MultiEdit"].includes(String(block.name))) {
             const file = str(input.file_path);
-            if (file && isHarness(file, cwd)) noteEdit(file, ts);
+            if (file && isHarness(file, cwd)) noteLatest(edits, file, ts);
           } else if (block.name === "Bash") {
             for (const file of detectShellWriteTargets(
               String(input.command ?? ""),
               cwd ?? undefined,
             ))
-              if (isHarness(file, cwd)) noteEdit(file, ts);
+              if (isHarness(file, cwd)) noteLatest(edits, file, ts);
           }
         }
       }
@@ -417,12 +412,21 @@ function resolveWindow(options: SimAuditOptions, paths: SimResolvedPaths, nowMs:
   return { sinceMs: nowMs - DEFAULT_DAYS * DAY_MS, source: `default last ${DEFAULT_DAYS}d` };
 }
 
-function localIsoDay(ts: string | null | undefined, fallbackDay: string): string {
-  if (!ts) return fallbackDay;
-  const ms = Date.parse(ts);
-  if (!Number.isFinite(ms)) return fallbackDay;
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const dayOf = (ts: string | null, fallbackDay: string) => {
+  const ms = ts ? Date.parse(ts) : Number.NaN;
+  return Number.isFinite(ms) ? localIsoDay(ms) : fallbackDay;
+};
+
+/** Keeps the latest known edit time per file; null only while no time is known. */
+function noteLatest(
+  edits: Map<string, string | null>,
+  file: string,
+  ts: string | null | undefined,
+): void {
+  const prev = edits.get(file);
+  if (prev === undefined || (ts != null && (prev === null || ts > prev))) {
+    edits.set(file, ts ?? null);
+  }
 }
 
 /** Latest SIM attempt day per file for each session, keyed by the id without its `cc:`/`t3:` kind. */
@@ -819,7 +823,7 @@ const make = Effect.gen(function* () {
       threadId: found.thread.thread_id,
       ...renderInspection(found.thread, found.runs, found.messages, found.items, found.events, {
         from,
-        limit: Math.min(limit, MAX_INSPECT_LINES),
+        limit: Math.min(limit, SIM_MAX_INSPECT_LINES),
       }),
     };
   });
@@ -934,7 +938,7 @@ function buildReport(input: ReportInput): SimAuditReport {
     for (const recorded of [false, true]) {
       const group = entries
         .filter(([file, editTs]) => {
-          const editDay = localIsoDay(editTs, edit.date);
+          const editDay = dayOf(editTs, edit.date);
           const hasRecord = sessionIds.some((id) => {
             const recordedDay = recordedFiles.get(id)?.get(file);
             return recordedDay !== undefined && recordedDay >= editDay;
@@ -1000,14 +1004,8 @@ function buildReport(input: ReportInput): SimAuditReport {
           { sessionId: "", ...(cwd ? { workspaceRoot: cwd } : {}) },
           paths,
         );
-        if (kind === "harness") {
-          const prev = harnessFiles.get(canonical);
-          if (prev === undefined || prev === null || item.updated_at > prev) {
-            harnessFiles.set(canonical, item.updated_at);
-          }
-        } else if (kind === "record") {
-          recordFiles.add(canonical);
-        }
+        if (kind === "harness") noteLatest(harnessFiles, canonical, item.updated_at);
+        else if (kind === "record") recordFiles.add(canonical);
       }
     }
     addHarnessEdits(
@@ -1213,11 +1211,7 @@ function buildReport(input: ReportInput): SimAuditReport {
       const date = (transcript.lastTs ?? new Date(sinceMs).toISOString()).slice(0, 10);
       const files = new Map<string, string | null>();
       for (const [file, ts] of transcript.harnessEdits) {
-        const canonical = SimStore.resolveCallerFile(file, { sessionId: "" }, paths);
-        const prev = files.get(canonical);
-        if (prev === undefined || (ts !== null && (prev === null || ts > prev))) {
-          files.set(canonical, ts);
-        }
+        noteLatest(files, SimStore.resolveCallerFile(file, { sessionId: "" }, paths), ts);
       }
       addHarnessEdits(
         {
@@ -1486,7 +1480,6 @@ function renderInspection(
   page: { readonly from: number; readonly limit: number },
 ): Omit<SimThreadInspectionResult, "threadId"> {
   const runs = runRows.map(runInfo);
-  const runStartById = new Map(runs.map((run) => [run.runId, run.requestedAt]));
   const entries: Array<{ at: string; order: number; subOrder: number; line: string }> = [];
   let userTurn = 0;
   for (const run of runs) {
@@ -1526,9 +1519,12 @@ function renderInspection(
         : item.type === "command_execution"
           ? `command(${squashText(payload.input, 120)})`
           : `${item.type}(${squashText(payload.title ?? payload.toolName ?? "", 80)})`;
-    // Anchor tool lines to their run's start + ordinal so pagination stays stable while a run updates items.
-    const at = (item.run_id ? runStartById.get(item.run_id) : undefined) ?? item.updated_at;
-    entries.push({ at, order: 2, subOrder: item.ordinal, line: `  tool: ${detail}` });
+    entries.push({
+      at: item.updated_at,
+      order: 2,
+      subOrder: item.ordinal,
+      line: `  tool: ${detail}`,
+    });
   }
   for (const event of events) {
     const payload = parseJson(event.payload_json);

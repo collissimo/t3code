@@ -26,11 +26,13 @@ import * as Effect from "effect/Effect";
 
 import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
+import {
+  delegatedTaskPrefix,
+  resolveInteractionMode,
+  resolveRuntimeMode,
+} from "./delegatedTaskModes.ts";
 import { fencingLinkOrigin } from "./linkOrigin.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-
-export const delegatedTaskPrefix = "thread:delegated-task:";
 
 const suggestedThreadId = (threadId: ThreadId) => {
   if (!threadId.startsWith(delegatedTaskPrefix)) return ThreadId.make(`mcp:${threadId}`);

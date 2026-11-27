@@ -148,6 +148,8 @@ export const providerOptionDescriptors = (
 ): ReadonlyArray<ProviderOptionDescriptor> =>
   provider?.models.flatMap((model) => model.capabilities?.optionDescriptors ?? []) ?? [];
 
+export const delegatedTaskPrefix = "thread:delegated-task:";
+
 const ROLE_PREAMBLE = /^\s*Act as the (\w+) sub-agent for this task\.\s*/;
 
 /** The task as its child receives it, with the role the caller asked for. */

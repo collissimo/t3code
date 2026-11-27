@@ -12,6 +12,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -60,6 +61,12 @@ export const SIM_FAILURE_RESULTS: ReadonlySet<SimResult> = new Set([
 ]);
 
 export const DAY_MS = 86_400_000;
+
+/** Calendar day in the server's zone, as standalone sim.mjs stamps `day` and `round`. */
+export const localIsoDay = (at: DateTime.DateTime | number) =>
+  DateTime.formatIsoDate(DateTime.setZone(DateTime.makeUnsafe(at), DateTime.zoneMakeLocal()));
+
+export const SIM_MAX_INSPECT_LINES = 500;
 
 export const pluralize = (count: number, word: string) =>
   `${count} ${word}${count === 1 ? "" : "s"}`;

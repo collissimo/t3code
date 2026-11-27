@@ -255,13 +255,25 @@ describe("detectShellWriteTargets", () => {
     },
     {
       name: "reads past wrapper flags and truncate size options",
-      command: "sudo -u root cp a ~/.claude/AGENTS.md; truncate -s 0 ~/.claude/CLAUDE.md",
-      targets: ["~/.claude/AGENTS.md", "~/.claude/CLAUDE.md"],
+      command:
+        "sudo -u root cp a ~/.claude/AGENTS.md; truncate -s 0 ~/.claude/CLAUDE.md; sudo -uroot cp b ~/.claude/notes/x.md",
+      targets: ["~/.claude/AGENTS.md", "~/.claude/CLAUDE.md", "~/.claude/notes/x.md"],
     },
     {
       name: "joins trailing-slash destinations with source basenames",
       command: "cp gate.mjs ~/.claude/hooks/; mv rule.md ~/.claude/notes/",
       targets: ["~/.claude/hooks/gate.mjs", "rule.md", "~/.claude/notes/rule.md"],
+    },
+    {
+      name: "joins no name for globs or rsync's contents-of-dir source",
+      command: "cp hooks/*.mjs ~/.claude/hooks/; rsync -a notes/ ~/.claude/notes/",
+      targets: ["~/.claude/hooks/", "~/.claude/notes/"],
+    },
+    {
+      name: "keeps a cd guarded by || from moving its fallback group or pipeline",
+      command: "cd x || { mkdir -p x; touch x/f; }; touch g; cd /y || touch a | tee b",
+      cwd: "/w",
+      targets: ["/w/x/f", "/w/x/g", "/w/x/a", "/w/x/b"],
     },
     {
       name: "reads past line continuations and shell keywords",
@@ -328,6 +340,9 @@ describe("isCodeReviewTask", () => {
     ["audit:checkout", "Workdir /work/app (branch t3/checkout). Read the brief first."],
     ["pruefen:code", "Repo /work/app. Lies zuerst den Auftrag."],
     ["Überprüfe den Code", ""],
+    ["Second look", "Repo /work/app, branch t3/foo. Review the diff for bugs."],
+    ["Fix-pass grader", "You are an independent grader. Read the diff."],
+    ["prüfung:quellen", "Arbeitsordner /work/app (Zweig t3/x). Lies zuerst den Auftrag."],
   ])("accepts %s", (title, prompt) => {
     assert.isTrue(SimObserverReactor.isCodeReviewTask(title, prompt));
   });
@@ -356,6 +371,10 @@ describe("isCodeReviewTask", () => {
       "seite",
       "Arbeitsordner: /work/app (Zweig t3/x). Lies zuerst brief.md; das ist der Auftrag mit Prüfpunkten für den Code.",
     ],
+    ["Recherche", "Prüfe, ob die Studie stimmt."],
+    ["Prüfung der Quellen", ""],
+    ["Search filter", "Implement the filter and review the code afterwards."],
+    ["Logging", "Explore the repository and audit where logging is configured."],
   ])("rejects %s", (title, prompt) => {
     assert.isFalse(SimObserverReactor.isCodeReviewTask(title, prompt));
   });

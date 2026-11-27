@@ -7,6 +7,7 @@ import {
   SIM_ACTIONS,
   SIM_DEPENDS,
   SIM_LINK_KINDS,
+  SIM_MAX_INSPECT_LINES,
   SIM_RESULTS,
   SIM_SOURCES,
   SimAuditService,
@@ -80,7 +81,9 @@ const SimReadTool = Tool.make("sim_read", {
     since: Schema.optionalKey(Schema.String),
     days: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThan(0))),
     from: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
-    limit: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
+    limit: Schema.optionalKey(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: SIM_MAX_INSPECT_LINES })),
+    ),
     includeClaudeLogs: Schema.optionalKey(Schema.Boolean),
     threadId: Schema.optionalKey(Schema.String),
   }),
