@@ -346,3 +346,72 @@ describe("SimService.applyHarnessChange", () => {
     }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
   });
 });
+
+describe("SimService reads", () => {
+  it.effect("serves 20 concurrent reads beside telemetry and epoch writes without an error", () => {
+    const sb = sandbox();
+    return Effect.gen(function* () {
+      const sim = yield* SimService;
+      const caller = editor(sb.workspace);
+      yield* sim.read(caller, { action: "index" });
+      yield* sim.applyHarnessChange(caller, quoteRule());
+      const actions = [
+        { action: "index" },
+        { action: "brief_all" },
+        { action: "show", ids: ["P1"] },
+        { action: "find", query: "build" },
+        { action: "check" },
+        { action: "by_file", file: sb.agents },
+      ] as const;
+      const reads = Array.from({ length: 20 }, (_, index) =>
+        sim.read(
+          { ...caller, sessionId: `t3:reader-${index % 4}` },
+          actions[index % actions.length]!,
+        ),
+      );
+      const results = yield* Effect.all(
+        [
+          ...reads,
+          sim.recordTelemetry({
+            kind: "new_model_observed",
+            ts: "2026-02-01T10:00:00.000Z",
+            providerInstanceId: "codex",
+            model: "gpt-5",
+          }),
+          sim.resetThreadSeenEpoch(ThreadId.make("bystander")),
+        ],
+        { concurrency: "unbounded" },
+      );
+      expect(results).toHaveLength(22);
+      const seenDir = NodePath.join(sb.harnessDir, "sim", "seen");
+      expect(NodeFS.readdirSync(seenDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
+  });
+
+  it.effect("reuses a frozen record until a file it was read from changes", () => {
+    const sb = sandbox();
+    return Effect.gen(function* () {
+      const sim = yield* SimService;
+      const caller = editor(sb.workspace);
+      yield* sim.read(caller, { action: "index" });
+      yield* sim.applyHarnessChange(caller, quoteRule());
+
+      const first = yield* sim.getStateSnapshot();
+      const again = yield* sim.getStateSnapshot();
+      expect(first?.state.problems).toHaveLength(1);
+      expect(again?.state).toBe(first?.state);
+      const problem = first!.state.problems[0]!;
+      expect(Object.isFrozen(problem.attempts[0])).toBe(true);
+      expect(() => {
+        problem.name = "renamed outside the journal";
+      }).toThrow(TypeError);
+
+      // An edit outside T3 must show on the next read, not the cached record.
+      NodeFS.appendFileSync(sb.journal, "not json\n");
+      const after = yield* sim.getStateSnapshot();
+      expect(after?.state).not.toBe(first?.state);
+      expect(after?.broken).toMatch(/line 2 is not valid JSON/);
+      expect((yield* sim.read(caller, { action: "index" })).text).toContain("WARNING");
+    }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
+  });
+});

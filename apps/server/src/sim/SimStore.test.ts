@@ -10,6 +10,8 @@ import * as Schema from "effect/Schema";
 import {
   classifyHarnessPath,
   resolveSimPaths,
+  SIM_FORMAT,
+  SIM_GENESIS,
   SimServiceError,
   type SimCallerContext,
   type SimJournalEvent,
@@ -769,5 +771,167 @@ describe("SimStore telemetry", () => {
     expect(kept.length).toBeLessThanOrEqual(2_000);
     expect(kept[kept.length - 1]).toEqual(event(2_099));
     expect(SimStore.readTelemetry(sb.paths, Date.parse("2026-11-11T00:00:00Z"))).toEqual([]);
+  });
+});
+
+/** Write a hash-chained journal directly, as another tool would have left it. */
+function writeJournal(
+  paths: SimResolvedPaths,
+  events: ReadonlyArray<{ by: string; op: SimJournalEvent["op"]; data: Record<string, unknown> }>,
+) {
+  NodeFS.mkdirSync(paths.simDir, { recursive: true });
+  let prev = SIM_GENESIS;
+  const lines = events.map((event, index) => {
+    const line = JSON.stringify({
+      seq: index + 1,
+      ts: "2026-02-01T10:00:00.000Z",
+      day: "2026-02-01",
+      by: event.by,
+      v: SIM_FORMAT,
+      op: event.op,
+      data: event.data,
+      prev,
+    });
+    prev = SimStore.sha(line);
+    return line;
+  });
+  NodeFS.writeFileSync(paths.journalPath, `${lines.join("\n")}\n`);
+}
+
+const oldChange = (extra: Record<string, unknown>) => ({
+  backfilled: true,
+  round: "2026-01-10",
+  what: "Rule to run the build first",
+  files: ["~/.claude/AGENTS.md"],
+  anchor: "run the build before you claim done",
+  depends_on: ["model"],
+  predicted: ["unverified-done", "red-build-merge"],
+  policy: "gpt-5",
+  domain: "global",
+  ...extra,
+});
+
+describe("SimStore derive", () => {
+  it("links each attempt to the first standing attempt that changes it, and keeps sim.json key order", () => {
+    using sb = sandbox();
+    const by = "t3:author";
+    writeJournal(sb.paths, [
+      {
+        by,
+        op: "attempt",
+        data: oldChange({
+          new: "Agents claim done without running the build",
+          action: "add",
+          why: "first try",
+        }),
+      },
+      {
+        by,
+        op: "attempt",
+        data: oldChange({ problem: "P1", action: "revise", supersedes: ["A1"], why: "second" }),
+      },
+      { by, op: "retract", data: { attempt: "A2", reason: "recorded by mistake" } },
+      {
+        by,
+        op: "attempt",
+        data: oldChange({ problem: "P1", action: "replace", supersedes: ["A1"], why: "third" }),
+      },
+      {
+        by,
+        op: "attempt",
+        data: {
+          problem: "P1",
+          action: "revise",
+          backfilled: true,
+          round: "2026-01-10",
+          what: "Drop the build rule again",
+          why: "a proposal nobody carried out",
+          supersedes: ["A3"],
+          accepted: false,
+          rejected_because: "the rule still helps",
+          policy: "gpt-5",
+          domain: "global",
+        },
+      },
+      {
+        by,
+        op: "amend",
+        data: { target: "A3", field: "why", value: "third, reworded", reason: "clearer reason" },
+      },
+      ...(["fixed", "missed"] as const).map((result, index) => ({
+        by: "t3:reviewer",
+        op: "observe" as const,
+        data: {
+          attempt: "A3",
+          observation: {
+            target: index === 0 ? "unverified-done" : "red-build-merge",
+            result,
+            evidence: "the next thread showed it in its build log",
+            source: "log",
+            policy: "gpt-5",
+            domain: "global",
+          },
+        },
+      })),
+      {
+        by,
+        op: "attempt",
+        data: oldChange({ problem: "P1", action: "revise", supersedes: ["A3"], why: "fifth" }),
+      },
+    ]);
+    const { state, journal: read } = SimStore.load(sb.paths);
+    expect(read.broken).toBeNull();
+    const attempts = SimStore.allAttempts(state);
+    const quadratic = (id: string) =>
+      attempts.find((item) => item.accepted && !item.retracted && item.supersedes.includes(id))
+        ?.id ?? null;
+    expect(attempts.map(({ id, superseded_by, live }) => ({ id, superseded_by, live }))).toEqual([
+      { id: "A1", superseded_by: "A3", live: false },
+      { id: "A2", superseded_by: null, live: false },
+      { id: "A3", superseded_by: "A5", live: false },
+      { id: "A4", superseded_by: null, live: false },
+      { id: "A5", superseded_by: null, live: true },
+    ]);
+    for (const item of attempts)
+      expect(item.superseded_by).toBe(item.accepted ? quadratic(item.id) : null);
+    const a3 = SimStore.findAttempt(state, "A3")!.attempt;
+    expect([a3.fixed, a3.missed, a3.pending]).toEqual([
+      ["unverified-done"],
+      ["red-build-merge"],
+      [],
+    ]);
+
+    const derived = ["missed", "fixed", "pending", "passed", "total", "superseded_by", "live"];
+    const onDisk = JSON.parse(NodeFS.readFileSync(sb.paths.recordPath, "utf8")) as {
+      problems: Array<{ attempts: Array<Record<string, unknown>> }>;
+    };
+    const diskA3 = Object.keys(onDisk.problems[0]!.attempts.find((item) => item.id === "A3")!);
+    expect(diskA3.slice(-derived.length)).toEqual(derived);
+    expect(diskA3.indexOf("amended")).toBeLessThan(diskA3.indexOf("missed"));
+    expect(Object.keys(a3).filter((key) => key !== "harness")).toEqual(diskA3);
+  });
+});
+
+describe("SimStore lock and file writes", () => {
+  it("releases sim.lock only while this process still holds it", () => {
+    using sb = sandbox();
+    expect(SimStore.tryLock(sb.paths)).toBe(true);
+    // Another process took the lock over after ours went stale.
+    NodeFS.writeFileSync(sb.paths.lockPath, `${process.pid + 1}`);
+    SimStore.unlock(sb.paths);
+    expect(NodeFS.readFileSync(sb.paths.lockPath, "utf8")).toBe(`${process.pid + 1}`);
+
+    NodeFS.writeFileSync(sb.paths.lockPath, `${process.pid}`);
+    SimStore.unlock(sb.paths);
+    expect(NodeFS.existsSync(sb.paths.lockPath)).toBe(false);
+    expect(() => SimStore.unlock(sb.paths)).not.toThrow();
+  });
+
+  it("leaves no temp file behind when the final rename fails", () => {
+    using sb = sandbox();
+    const target = NodePath.join(sb.paths.simDir, "occupied");
+    NodeFS.mkdirSync(NodePath.join(target, "child"), { recursive: true });
+    expect(() => SimStore.writeWhole(target, "content")).toThrow();
+    expect(NodeFS.readdirSync(sb.paths.simDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });

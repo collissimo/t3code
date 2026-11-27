@@ -72,7 +72,7 @@ const KEPT_BACKUPS = 14;
 const FAIL_CHARS = 8000;
 const BACKUP_NAME = /^sim-\d{4}-\d{2}-\d{2}\.jsonl$/;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const BACKED_UP_TOOLS = ["sim.mjs", "sim.test.mjs", "sim-audit.mjs"];
+const BACKED_UP_TOOLS = ["sim.mjs", "sim.test.mjs", "sim-audit.mjs", "try-harness.sh"];
 
 const SIM_LOCK_STALE_MS = 30_000;
 export const SIM_LOCK_WAIT_MS = 15_000;
@@ -911,6 +911,13 @@ function applyEvent(
 
 /** Fill in what follows from the record: outcome tallies and liveness. */
 function derive(state: SimState): SimState {
+  // Same answer as supersededBy() per attempt: the first standing attempt, in record order, that names it.
+  const supersededIndex = new Map<string, string>();
+  for (const later of allAttempts(state)) {
+    if (!later.accepted || later.retracted) continue;
+    for (const id of later.supersedes)
+      if (!supersededIndex.has(id)) supersededIndex.set(id, later.id);
+  }
   for (const problem of state.problems) {
     for (const attempt of problem.attempts) {
       const outcomes = standing(attempt);
@@ -923,7 +930,7 @@ function derive(state: SimState): SimState {
       attempt.pending = attempt.predicted.filter((target) => !fixed(target) && !missed(target));
       attempt.passed = outcomes.filter((obs) => settlesFix(attempt, obs)).length;
       attempt.total = outcomes.filter((obs) => obs.result !== "kept").length;
-      attempt.superseded_by = attempt.accepted ? supersededBy(state, attempt.id) : null;
+      attempt.superseded_by = attempt.accepted ? (supersededIndex.get(attempt.id) ?? null) : null;
       attempt.live =
         attempt.accepted &&
         !attempt.retracted &&
@@ -1000,8 +1007,15 @@ export function tryLock(paths: SimResolvedPaths): boolean {
   return false;
 }
 
+/** Release sim.lock only while this process still holds it: a lock taken over as stale belongs to its new holder. */
 export function unlock(paths: SimResolvedPaths) {
-  NodeFS.rmSync(paths.lockPath, { force: true });
+  let holder: string;
+  try {
+    holder = NodeFS.readFileSync(paths.lockPath, "utf8").trim();
+  } catch {
+    return;
+  }
+  if (holder === `${process.pid}`) NodeFS.rmSync(paths.lockPath, { force: true });
 }
 
 /**
@@ -1045,22 +1059,28 @@ function serializeForDisk(state: SimState): string {
   return `${JSON.stringify(diskState, null, 1)}\n`;
 }
 
-function writeWhole(
+/** Replace a file atomically through a temp file unique to this call; a failed write leaves no temp behind. */
+export function writeWhole(
   file: string,
   content: string | Uint8Array,
   options?: { readonly mode?: number | undefined },
 ) {
-  const temp = `${file}.${process.pid}.tmp`;
-  NodeFS.writeFileSync(
-    temp,
-    content,
-    options?.mode !== undefined ? { mode: options.mode } : undefined,
-  );
-  if (options?.mode !== undefined) {
-    // Re-apply mode after creation so process umask does not strip executable bits (e.g. .sh hooks).
-    NodeFS.chmodSync(temp, options.mode);
+  const temp = `${file}.${process.pid}.${NodeCrypto.randomBytes(6).toString("hex")}.tmp`;
+  try {
+    NodeFS.writeFileSync(
+      temp,
+      content,
+      options?.mode !== undefined ? { mode: options.mode } : undefined,
+    );
+    if (options?.mode !== undefined) {
+      // Re-apply mode after creation so process umask does not strip executable bits (e.g. .sh hooks).
+      NodeFS.chmodSync(temp, options.mode);
+    }
+    NodeFS.renameSync(temp, file);
+  } catch (error) {
+    NodeFS.rmSync(temp, { force: true });
+    throw error;
   }
-  NodeFS.renameSync(temp, file);
 }
 
 const backupNames = (paths: SimResolvedPaths) =>
@@ -1089,6 +1109,15 @@ function departsFromBackup(
   return null;
 }
 
+function sizeOf(file: string): number | null {
+  try {
+    const stat = NodeFS.statSync(file);
+    return stat.isFile() ? stat.size : null;
+  } catch {
+    return null;
+  }
+}
+
 function backup(paths: SimResolvedPaths) {
   NodeFS.mkdirSync(paths.backupsDir, { recursive: true });
   writeWhole(
@@ -1101,10 +1130,11 @@ function backup(paths: SimResolvedPaths) {
   }
   for (const name of BACKED_UP_TOOLS) {
     const source = NodePath.join(paths.simDir, name);
-    if (!NodeFS.existsSync(source)) continue;
-    const content = NodeFS.readFileSync(source);
+    const sourceSize = sizeOf(source);
+    if (sourceSize === null) continue;
     const target = NodePath.join(paths.backupsDir, name);
-    if (!NodeFS.existsSync(target) || !NodeFS.readFileSync(target).equals(content))
+    const content = NodeFS.readFileSync(source);
+    if (sizeOf(target) !== sourceSize || !NodeFS.readFileSync(target).equals(content))
       writeWhole(target, content);
   }
 }
@@ -1176,6 +1206,37 @@ export function loadReadOnly(paths: SimResolvedPaths): SimLoaded {
   const seen = readTrusted(paths);
   if (!seen.journal.broken) return { journal: seen.journal, state: seen.state, healed: false };
   return shownFromDisk(seen);
+}
+
+/**
+ * Identity of every file loadReadOnly reads (journal, sim.json, newest backup) by inode, size and
+ * nanosecond times, or null when one cannot be stat'ed for a reason other than being absent.
+ */
+export function readFingerprint(paths: SimResolvedPaths): string | null {
+  const part = (file: string) => {
+    try {
+      const stat = NodeFS.statSync(file, { bigint: true });
+      return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "-";
+      throw error;
+    }
+  };
+  try {
+    const names = backupNames(paths);
+    const newest = names[names.length - 1];
+    return [
+      paths.simDir,
+      paths.harnessDir,
+      paths.homeDir,
+      part(paths.journalPath),
+      part(paths.recordPath),
+      newest ?? "-",
+      newest ? part(NodePath.join(paths.backupsDir, newest)) : "-",
+    ].join("\u0000");
+  } catch {
+    return null;
+  }
 }
 
 /** Load the record; the caller holds sim.lock. The journal decides: a differing sim.json is rebuilt. */
@@ -1280,10 +1341,25 @@ function readHarnessFile(
   }
 }
 
+const countSquashed = (text: string, phrase: string) => text.split(phrase).length - 1;
 const occurrences = (text: string, phrase: string | null) =>
-  squash(text).split(squash(phrase ?? "")).length - 1;
+  countSquashed(squash(text), squash(phrase ?? ""));
 
-function coverageUnits(paths: SimResolvedPaths) {
+type HarnessReader = (file: string) => { readonly text: string; readonly squashed: string } | null;
+
+/** Reads (and squashes) each harness file at most once for the reader's lifetime. */
+function harnessReader(paths: SimResolvedPaths): HarnessReader {
+  const seen = new Map<string, { readonly text: string; readonly squashed: string } | null>();
+  return (file) => {
+    if (seen.has(file)) return seen.get(file) ?? null;
+    const text = readHarnessFile(file, paths);
+    const entry = text === null ? null : { text, squashed: squash(text) };
+    seen.set(file, entry);
+    return entry;
+  };
+}
+
+function coverageUnits(paths: SimResolvedPaths, read: HarnessReader = harnessReader(paths)) {
   const units: Array<{ file: string; text: string | null }> = [];
   const notes = NodePath.join(paths.harnessDir, "notes");
   const noteFiles = NodeFS.existsSync(notes)
@@ -1293,7 +1369,7 @@ function coverageUnits(paths: SimResolvedPaths) {
         .map((name) => `~/.claude/notes/${name}`)
     : [];
   for (const file of ["~/.claude/AGENTS.md", ...noteFiles]) {
-    const text = readHarnessFile(file, paths);
+    const text = read(file)?.text ?? null;
     if (text === null) continue;
     let inLessons = false;
     for (const line of text.split("\n")) {
@@ -1359,24 +1435,32 @@ export interface SimHarnessHealth {
 /** Compare the record with the harness files: drift, and agent-added rules without a record. */
 export function inspectHarness(state: SimState, paths: SimResolvedPaths): SimHarnessHealth {
   const live = allAttempts(state).filter((attempt) => attempt.live);
+  const read = harnessReader(paths);
+  const anchors = new Map(live.map((attempt) => [attempt, squash(attempt.anchor ?? "")]));
+  const byFile = new Map<string, Array<SimAttempt>>();
   const drift: Array<{ attempt: SimAttempt; reason: string }> = [];
   const unchecked: Array<SimAttempt> = [];
   for (const attempt of live) {
+    for (const file of new Set(attempt.files)) {
+      const list = byFile.get(file);
+      if (list) list.push(attempt);
+      else byFile.set(file, [attempt]);
+    }
     const first = attempt.files[0] ?? "";
-    const text = readHarnessFile(first, paths);
-    if (text === null) {
+    const entry = read(first);
+    if (entry === null) {
       if (first.startsWith("~/.claude/"))
         drift.push({ attempt, reason: `${first} does not exist` });
       else unchecked.push(attempt);
-    } else if (!occurrences(text, attempt.anchor)) {
+    } else if (!countSquashed(entry.squashed, anchors.get(attempt) ?? "")) {
       drift.push({ attempt, reason: `"${attempt.anchor}" is no longer in ${first}` });
     }
   }
-  const uncovered = coverageUnits(paths).filter((unit) => {
-    const inFile = live.filter((attempt) => attempt.files.includes(unit.file));
-    return unit.text === null
-      ? !inFile.length
-      : !inFile.some((attempt) => occurrences(unit.text!, attempt.anchor));
+  const uncovered = coverageUnits(paths, read).filter((unit) => {
+    const inFile = byFile.get(unit.file) ?? [];
+    if (unit.text === null) return !inFile.length;
+    const line = squash(unit.text);
+    return !inFile.some((attempt) => countSquashed(line, anchors.get(attempt) ?? ""));
   });
   return { drift, uncovered, unchecked };
 }
@@ -1905,6 +1989,19 @@ const seenFile = (paths: SimResolvedPaths, session: string) =>
 const stamp = (state: SimState, problem: SimProblem) =>
   sha(renderProblemWith(state, problem, false)).slice(0, 16);
 
+/** stamp() for one state, rendering and hashing each entry at most once. */
+function stamper(state: SimState) {
+  const marks = new Map<SimProblem, string>();
+  return (problem: SimProblem) => {
+    let mark = marks.get(problem);
+    if (mark === undefined) {
+      mark = stamp(state, problem);
+      marks.set(problem, mark);
+    }
+    return mark;
+  };
+}
+
 const freshLog = (session: string): SeenLog => ({
   session,
   full: {},
@@ -1940,6 +2037,9 @@ function joinRanges(ranges: ReadonlyArray<[number, number]>) {
   return out;
 }
 
+const SEEN_PRUNE_INTERVAL_MS = 5 * 60_000;
+const lastSeenPrune = new Map<string, number>();
+
 function saveSeen(paths: SimResolvedPaths, session: string, log: SeenLog) {
   try {
     NodeFS.mkdirSync(paths.seenDir, { recursive: true });
@@ -1947,7 +2047,11 @@ function saveSeen(paths: SimResolvedPaths, session: string, log: SeenLog) {
   } catch {
     return;
   }
-  const limit = Date.now() - SEEN_DAYS * 86_400_000;
+  const now = Date.now();
+  // Logs live SEEN_DAYS, so one prune per interval per dir keeps the dir just as small.
+  if (now - (lastSeenPrune.get(paths.seenDir) ?? -Infinity) < SEEN_PRUNE_INTERVAL_MS) return;
+  lastSeenPrune.set(paths.seenDir, now);
+  const limit = now - SEEN_DAYS * 86_400_000;
   for (const name of NodeFS.readdirSync(paths.seenDir)) {
     try {
       if (NodeFS.statSync(NodePath.join(paths.seenDir, name)).mtimeMs < limit) {
@@ -2155,12 +2259,13 @@ export function markShown(
   keepTime = false,
 ) {
   if (!items.length) return;
+  const markOf = stamper(state);
   for (const session of scope.sessions) {
     const log = currentLog(paths, session, scope);
     const now = Date.now();
     const lapsed = (at: number) => session === SIM_UNKNOWN && now - at > SITTING_MINUTES * 60_000;
     for (const { problem, from = 0, to = 1, of = 1 } of items) {
-      const mark = stamp(state, problem);
+      const mark = markOf(problem);
       let at = now;
       if (!(from === 0 && to >= of)) {
         const key = `${problem.id} ${level}`;
@@ -2186,8 +2291,7 @@ export function markShown(
       !keepTime &&
       state.problems.length &&
       state.problems.every(
-        (problem) =>
-          log.brief[problem.id] === stamp(state, problem) && !lapsed(log.at[problem.id] ?? 0),
+        (problem) => log.brief[problem.id] === markOf(problem) && !lapsed(log.at[problem.id] ?? 0),
       )
     ) {
       log.index_at = now;
@@ -2203,6 +2307,7 @@ export function shownTo(
   scope: SimSeenScope,
 ): Map<string, "full" | "brief"> {
   const levels = new Map<string, "full" | "brief">();
+  const markOf = stamper(state);
   for (const session of scope.sessions) {
     const log = readSeen(paths, session);
     if ((log.t3_epoch ?? 0) < scope.epoch) continue;
@@ -2210,7 +2315,7 @@ export function shownTo(
       session === SIM_UNKNOWN && Date.now() - (log.at[id] ?? 0) > SITTING_MINUTES * 60_000;
     for (const problem of state.problems) {
       if (lapsed(problem.id) || (log.at[problem.id] ?? 0) < scope.resetAt) continue;
-      const mark = stamp(state, problem);
+      const mark = markOf(problem);
       if (log.full[problem.id] === mark) levels.set(problem.id, "full");
       else if (log.brief[problem.id] === mark && !levels.has(problem.id))
         levels.set(problem.id, "brief");
@@ -2477,12 +2582,16 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
   const { paths, loaded, caller } = context;
   const { journal, state, healed } = loaded;
   const scope = seenScope(paths, caller);
-  const health = inspectHarness(state, paths);
+  // "find" shows neither warnings nor health, so it skips the harness file reads.
+  let checked: SimHarnessHealth | undefined;
+  const health = () => (checked ??= inspectHarness(state, paths));
   const head: Array<string> = [];
-  if (healed) head.push(HEALED_NOTE);
-  head.push(...warnings(state, journal, health));
+  if (request.action !== "find") {
+    if (healed) head.push(HEALED_NOTE);
+    head.push(...warnings(state, journal, health()));
+  }
   const escalation = () =>
-    buildAdvisorEscalation(state, context.settings, health, context.telemetry);
+    buildAdvisorEscalation(state, context.settings, health(), context.telemetry);
   const writable = !journal.broken;
 
   switch (request.action) {
@@ -2591,7 +2700,7 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
       return { text };
     }
     case "check":
-      return renderCheck(paths, loaded, health, request.page);
+      return renderCheck(paths, loaded, health(), request.page);
     case "review":
       return {
         text: renderReview(state, {

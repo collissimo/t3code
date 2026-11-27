@@ -31,6 +31,15 @@ const toSimError = (cause: unknown): SimServiceError =>
 
 const attempt = <A>(work: () => A) => Effect.try({ try: work, catch: toSimError });
 
+/** Freeze a loaded record all the way down, so a read path that mutates the cached copy throws. */
+const deepFreeze = <A>(value: A): A => {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+};
+
 const recentKey = (threadId: string, runId: string | undefined) =>
   `${threadId}\u0000${runId ?? ""}`;
 const threadCaller = (threadId: string, workspaceRoot?: string) => ({
@@ -40,8 +49,12 @@ const threadCaller = (threadId: string, workspaceRoot?: string) => ({
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
-  const writes = yield* Semaphore.make(1);
+  // Journal writes wait up to SIM_LOCK_WAIT_MS on sim.lock; seen epochs and telemetry must not queue behind that.
+  const journalWrites = yield* Semaphore.make(1);
+  const metaWrites = yield* Semaphore.make(1);
   const recent = new Map<string, Set<string>>();
+  let readCache: { readonly fingerprint: string; readonly loaded: SimStore.SimLoaded } | null =
+    null;
 
   const simSettings: Effect.Effect<SimSettingsConfig, SimServiceError> =
     serverSettings.getSettings.pipe(
@@ -72,15 +85,34 @@ const make = Effect.gen(function* () {
     }
   });
   const locked = <A, E, R>(paths: SimResolvedPaths, effect: Effect.Effect<A, E, R>) =>
-    writes.withPermits(1)(
-      Effect.acquireUseRelease(
-        acquireFileLock(paths),
-        () => effect,
-        () => Effect.sync(() => SimStore.unlock(paths)),
-      ),
-    );
+    journalWrites
+      .withPermits(1)(
+        Effect.acquireUseRelease(
+          acquireFileLock(paths),
+          () => effect,
+          () => Effect.sync(() => SimStore.unlock(paths)),
+        ),
+      )
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            readCache = null;
+          }),
+        ),
+      );
 
-  const loadForRead = (paths: SimResolvedPaths) => attempt(() => SimStore.loadReadOnly(paths));
+  /** The record as loadReadOnly sees it, reused while none of the files it reads changed. */
+  const loadForRead = (paths: SimResolvedPaths) =>
+    attempt(() => {
+      const before = SimStore.readFingerprint(paths);
+      if (before !== null && readCache?.fingerprint === before) return readCache.loaded;
+      const loaded = deepFreeze(SimStore.loadReadOnly(paths));
+      // A writer that lands mid-load leaves a mix of old and new files: use it once, cache it never.
+      if (before !== null && SimStore.readFingerprint(paths) === before) {
+        readCache = { fingerprint: before, loaded };
+      }
+      return loaded;
+    });
 
   const recordRecent = (
     threadId: string,
@@ -145,7 +177,7 @@ const make = Effect.gen(function* () {
     resetThreadSeenEpoch: Effect.fn("SimService.resetThreadSeenEpoch")(
       function* (threadId: ThreadId, extraSessionIds?: ReadonlyArray<string>) {
         const paths = pathsOf(yield* simSettings);
-        return yield* writes.withPermits(1)(
+        return yield* metaWrites.withPermits(1)(
           attempt(() => SimStore.resetThreadSeenEpoch(paths, threadId, extraSessionIds)),
         );
       },
@@ -157,7 +189,7 @@ const make = Effect.gen(function* () {
     trackProviderThread: Effect.fn("SimService.trackProviderThread")(
       function* ({ threadId, providerThreadId, extraSessionIds }) {
         const paths = pathsOf(yield* simSettings);
-        return yield* writes.withPermits(1)(
+        return yield* metaWrites.withPermits(1)(
           attempt(() =>
             SimStore.trackProviderThread(paths, threadId, providerThreadId, extraSessionIds),
           ),
@@ -182,7 +214,9 @@ const make = Effect.gen(function* () {
       function* (event) {
         const sim = yield* simSettings;
         if (!sim.enabled) return;
-        yield* writes.withPermits(1)(attempt(() => SimStore.appendTelemetry(pathsOf(sim), event)));
+        yield* metaWrites.withPermits(1)(
+          attempt(() => SimStore.appendTelemetry(pathsOf(sim), event)),
+        );
       },
       Effect.catchCause((cause) => Effect.logWarning("SIM telemetry failed", cause)),
     ),
