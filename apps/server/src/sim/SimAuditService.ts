@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - reads Claude Code transcripts and gate logs like sim-audit.mjs, whose timestamps are plain ISO strings.
-import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -368,14 +367,10 @@ function readWatermark(paths: SimResolvedPaths): string | null {
 function writeWatermark(paths: SimResolvedPaths, nowMs: number, by: string): string {
   const now = new Date(nowMs).toISOString();
   NodeFS.mkdirSync(NodePath.dirname(paths.auditStatePath), { recursive: true });
-  const temp = `${paths.auditStatePath}.${process.pid}.${NodeCrypto.randomBytes(4).toString("hex")}.tmp`;
-  try {
-    NodeFS.writeFileSync(temp, `${JSON.stringify({ last_audit_at: now, by }, null, 2)}\n`);
-    NodeFS.renameSync(temp, paths.auditStatePath);
-  } catch (cause) {
-    NodeFS.rmSync(temp, { force: true });
-    throw cause;
-  }
+  SimStore.writeWhole(
+    paths.auditStatePath,
+    `${JSON.stringify({ last_audit_at: now, by }, null, 2)}\n`,
+  );
   return now;
 }
 
@@ -1244,8 +1239,12 @@ function buildReport(input: ReportInput): SimAuditReport {
   const live = SimStore.allAttempts(state).filter((attempt) => attempt.live);
   const open = live.filter((attempt) => attempt.pending.length > 0 || attempt.missed.length > 0);
   const missed = live.filter((attempt) => attempt.missed.length > 0);
-  const problemOf = (attemptId: string) =>
-    SimStore.findAttempt(state, attemptId)?.problem.id ?? "?";
+  const attemptToProblem = new Map<string, string>(
+    state.problems.flatMap((problem) =>
+      problem.attempts.map((attempt) => [attempt.id, problem.id] as const),
+    ),
+  );
+  const problemOf = (attemptId: string) => attemptToProblem.get(attemptId) ?? "?";
   const newModels = [...freshModels.values()];
   const escalationTelemetry: Array<SimTelemetryEvent> = [
     ...telemetry,

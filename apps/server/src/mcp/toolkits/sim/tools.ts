@@ -53,7 +53,7 @@ const attemptFields = {
 const SimReadTool = Tool.make("sim_read", {
   ...shared,
   description:
-    "Read the SIM record of harness changes (AGENTS.md, CLAUDE.md, notes, hooks). Actions: index, show (ids, brief), brief_all, find (query), by_file (file), check, review (policy, harness), audit (since|days, limit, includeClaudeLogs), inspect_thread (threadId). Reading records server-side read state that harness edits and SIM writes require.",
+    "Read the SIM record of harness changes (AGENTS.md, CLAUDE.md, notes, hooks). Actions: index, show (ids, brief), brief_all, find (query), by_file (file), stats (staleDays), check, review (policy, harness), audit (since|days, limit, includeClaudeLogs), inspect_thread (threadId, from, limit). Reading records server-side read state that harness edits and SIM writes require.",
   parameters: Schema.Struct({
     action: Schema.Literals([
       "index",
@@ -61,6 +61,7 @@ const SimReadTool = Tool.make("sim_read", {
       "brief_all",
       "find",
       "by_file",
+      "stats",
       "check",
       "review",
       "audit",
@@ -73,8 +74,10 @@ const SimReadTool = Tool.make("sim_read", {
     policy: Schema.optionalKey(Schema.String),
     harness: Schema.optionalKey(Schema.String),
     page: Schema.optionalKey(Schema.Int),
+    staleDays: Schema.optionalKey(Schema.Int),
     since: Schema.optionalKey(Schema.String),
-    days: Schema.optionalKey(Schema.Number),
+    days: Schema.optionalKey(Schema.Finite),
+    from: Schema.optionalKey(Schema.Int),
     limit: Schema.optionalKey(Schema.Int),
     includeClaudeLogs: Schema.optionalKey(Schema.Boolean),
     threadId: Schema.optionalKey(Schema.String),
@@ -85,6 +88,8 @@ const SimReadTool = Tool.make("sim_read", {
     failed: Schema.optionalKey(Schema.Boolean),
     advisorEscalation: Schema.optionalKey(Schema.Unknown),
     summary: Schema.optionalKey(Schema.Unknown),
+    totalLines: Schema.optionalKey(Schema.Int),
+    nextFrom: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   }),
 })
   .annotate(Tool.Readonly, true)

@@ -429,6 +429,17 @@ function packRuleSections(
 
 // ── SIM tool guide ───────────────────────────────────────────────────
 
+const MAX_WITHHELD_IN_GUIDE = 8;
+
+function formatWithheldBullet(withheld: ReadonlyArray<SimWithheldRule>): string {
+  const shown = withheld
+    .slice(0, MAX_WITHHELD_IN_GUIDE)
+    .map((rule) => `"${rule.anchor}" (${rule.reason})`);
+  const extra = withheld.length - shown.length;
+  const suffix = extra > 0 ? `, +${extra} more` : "";
+  return `- SIM withheld these rules from this thread: ${shown.join(", ")}${suffix}. Do not follow them here.`;
+}
+
 function simGuideSection(
   settings: SimSettingsConfig,
   omitted: ReadonlyArray<string>,
@@ -452,11 +463,7 @@ function simGuideSection(
       : [
           `- Not every harness rule fit here. Read ${omitted.map((file) => `\`${file}\``).join(", ")} for the rest.`,
         ]),
-    ...(withheld.length === 0
-      ? []
-      : [
-          `- SIM withheld these rules from this thread: ${withheld.map((rule) => `"${rule.anchor}" (${rule.reason})`).join(", ")}. Do not follow them here.`,
-        ]),
+    ...(withheld.length === 0 ? [] : [formatWithheldBullet(withheld)]),
   ];
   return truncateUtf8(lines.join("\n"), SIM_SECTION_MAX_UTF8_BYTES);
 }

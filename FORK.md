@@ -249,6 +249,7 @@ epochs per thread). Nothing lives in SQLite, so the fork adds no database migrat
   direct edits of the SIM record files, checkpoint rollbacks, model switches after the first turn,
   runs a person stopped and followed up, completed review tasks, and models seen for the first
   time. `SimAuditService` reads it back for the audit.
+- `sim_read` also supports `stats` (per-model/harness scorecard and hotspots), stemmed ranked `find` with `status:`/`file:`/`model:`/`harness:` filters, and `inspect_thread` pagination (`from`, `limit`), backed by stat-validated read caching and unified shell-write and code-review audit detectors.
 
 Code: `apps/server/src/sim/`, `apps/server/src/mcp/toolkits/sim/`,
 `packages/contracts/src/settings.ts` (`sim`),

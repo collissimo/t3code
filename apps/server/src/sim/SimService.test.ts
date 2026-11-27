@@ -360,6 +360,7 @@ describe("SimService reads", () => {
         { action: "brief_all" },
         { action: "show", ids: ["P1"] },
         { action: "find", query: "build" },
+        { action: "stats" },
         { action: "check" },
         { action: "by_file", file: sb.agents },
       ] as const;
@@ -412,6 +413,13 @@ describe("SimService reads", () => {
       expect(after?.state).not.toBe(first?.state);
       expect(after?.broken).toMatch(/line 2 is not valid JSON/);
       expect((yield* sim.read(caller, { action: "index" })).text).toContain("WARNING");
+      const stats = yield* sim.read(caller, { action: "stats", staleDays: 7 });
+      expect(stats.text).toContain("# SIM scorecard");
+      expect(stats.text).toContain("Token budget:");
+      expect(stats.text).toContain("WARNING:");
+      expect((yield* sim.read(caller, { action: "find", query: "status:live" })).text).toContain(
+        "P1 ",
+      );
     }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
   });
 });

@@ -9,6 +9,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  FORK_FAMILY_REASON,
   SIM_DEFAULT_PAGE_CHARS,
   SIM_DEPENDS,
   SIM_FORMAT,
@@ -24,10 +25,16 @@ import {
   SIM_UNKNOWN,
   SIM_ACTIONS,
   SimServiceError,
+  bare,
   canonicalHarnessFile,
+  effectiveHarness,
   expandHarnessFile,
   expandHomeString,
   isPathWithinRoot,
+  ownReport,
+  settlesFix,
+  sharesFamily,
+  standing,
   type SimAdvisorEscalation,
   type SimAdvisorEscalationCandidate,
   type SimApplyHarnessChangeRequest,
@@ -52,6 +59,9 @@ import {
   type SimWriteRequest,
   type SimWriteResult,
 } from "./SimContracts.ts";
+import { buildSimStats, renderSimStats, searchProblemsRanked } from "./SimStats.ts";
+
+export { bare };
 
 type Data = Record<string, unknown>;
 
@@ -116,9 +126,6 @@ function isDate(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-/** A session id without the kind in front, so that "cc:abc" and "abc" name the same session. */
-export const bare = (id: string) => String(id).replace(/^(cc|t3):/, "");
-
 const canonicalFile = (file: unknown, paths: SimResolvedPaths) =>
   canonicalHarnessFile(String(file), paths);
 
@@ -127,13 +134,6 @@ export function isTestSimDir(paths: Pick<SimResolvedPaths, "simDir">): boolean {
   const rel = NodePath.relative(NodeOS.tmpdir(), paths.simDir);
   return rel !== "" && !rel.startsWith("..") && !NodePath.isAbsolute(rel);
 }
-
-/** The harness a record was made under; Claude Code sessions recorded by sim.mjs carry none. */
-const effectiveHarness = (record: {
-  readonly harness?: string | undefined;
-  readonly by: string;
-}): string | undefined =>
-  record.harness ?? (record.by.startsWith("cc:") ? "claudeAgent" : undefined);
 
 function emptyState(): SimState {
   return {
@@ -202,56 +202,6 @@ function supersededBy(state: SimState, attemptId: string): string | null {
   );
   return later ? later.id : null;
 }
-
-const standing = (attempt: SimAttempt) => attempt.observations.filter((obs) => !obs.retracted);
-
-const FORK_FAMILY_REASON =
-  "reported from the fork or side-chat family of the session that made the change";
-
-/** True when one of these sessions made or recorded the attempt, compared with and without `cc:`/`t3:`. */
-function sharesFamily(
-  attempt: Pick<SimAttempt, "by" | "also" | "sample">,
-  sessionIds: ReadonlyArray<string>,
-): boolean {
-  const authors = [attempt.by, attempt.also, attempt.sample].filter(
-    (id): id is string => !!id && id !== SIM_UNKNOWN,
-  );
-  return sessionIds.some((id) =>
-    authors.some((author) => id === author || bare(id) === bare(author)),
-  );
-}
-
-/**
- * Why a reported fix cannot settle the prediction, or null when it can. Matches sim.mjs and also
- * compares session ids without their `cc:`/`t3:` kind, plus the caller's fork/side-chat family.
- */
-function ownReport(
-  attempt: Pick<SimAttempt, "by" | "also" | "sample" | "backfilled">,
-  obs: Pick<SimObservation, "by" | "also" | "source">,
-  forkFamilySessionIds?: ReadonlyArray<string>,
-): string | null {
-  const names = (record: { readonly by: string; readonly also?: string | undefined }) =>
-    [record.by, record.also].filter((id): id is string => !!id && id !== SIM_UNKNOWN);
-  const same = (a: string, b: string) => a === b || bare(a) === bare(b);
-  if (obs.source === "self") return "self-reported";
-  if (obs.by === SIM_UNKNOWN) return "the reporting session is unknown";
-  const reporters = names(obs);
-  if (reporters.some((id) => names(attempt).some((author) => same(id, author)))) {
-    return attempt.backfilled
-      ? "reported by the session that recorded the change"
-      : "same session as the change";
-  }
-  if (attempt.sample !== SIM_UNKNOWN && reporters.some((id) => same(id, attempt.sample))) {
-    return "same session as the change";
-  }
-  if (forkFamilySessionIds && sharesFamily(attempt, forkFamilySessionIds))
-    return FORK_FAMILY_REASON;
-  if (attempt.by === SIM_UNKNOWN) return "the session that recorded the change is unknown";
-  return null;
-}
-
-const settlesFix = (attempt: SimAttempt, obs: SimObservation) =>
-  obs.result === "fixed" && !ownReport(attempt, obs);
 
 const ATTEMPT_FIELDS = [
   "problem",
@@ -1674,27 +1624,13 @@ function renderFile(state: SimState, file: string): Array<string> {
   return lines;
 }
 
-const attemptText = (attempt: SimAttempt) =>
-  [
-    attempt.what,
-    attempt.why,
-    attempt.anchor,
-    attempt.expect,
-    attempt.rejected_because,
-    ...attempt.predicted,
-    ...attempt.observations.map((obs) => `${obs.target} ${obs.evidence}`),
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-function searchProblems(state: SimState, query: string): Array<SimProblem> {
-  const wanted = squash(query).toLowerCase().split(" ").filter(Boolean);
-  return state.problems.filter((problem) => {
-    const text = [problem.name, ...problem.former_names, ...problem.attempts.map(attemptText)]
-      .join(" ")
-      .toLowerCase();
-    return wanted.every((word) => text.includes(word));
-  });
+function sizeTokens(state: SimState) {
+  return {
+    index: estimateTokens(renderIndex(state)),
+    full: estimateTokens(
+      state.problems.map((problem) => renderProblem(state, problem)).join("\n\n"),
+    ),
+  };
 }
 
 function attemptState(attempt: SimAttempt) {
@@ -1857,7 +1793,7 @@ function warnings(state: SimState, journal: SimJournal, health: SimHarnessHealth
 }
 
 const rulesPointer = () =>
-  'How to read and write this record: use sim_read ("index", "by_file", "show", "check", "review", "audit"), sim_write, and sim_apply_harness_change.';
+  'How to read and write this record: use sim_read ("index", "by_file", "show", "find", "stats", "check", "review", "audit"), sim_write, and sim_apply_harness_change.';
 const HEALED_NOTE =
   "note: sim.json did not match the journal and was rebuilt. Change the record only through this tool.";
 
@@ -2582,13 +2518,15 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
   const { paths, loaded, caller } = context;
   const { journal, state, healed } = loaded;
   const scope = seenScope(paths, caller);
-  // "find" shows neither warnings nor health, so it skips the harness file reads.
+  // "find" and "stats" do not read harness files; stats still surfaces journal corruption.
   let checked: SimHarnessHealth | undefined;
   const health = () => (checked ??= inspectHarness(state, paths));
   const head: Array<string> = [];
-  if (request.action !== "find") {
+  if (request.action !== "find" && request.action !== "stats") {
     if (healed) head.push(HEALED_NOTE);
     head.push(...warnings(state, journal, health()));
+  } else if (request.action === "stats" && journal.broken) {
+    head.push(`WARNING: ${brokenHelp(journal.broken)}`);
   }
   const escalation = () =>
     buildAdvisorEscalation(state, context.settings, health(), context.telemetry);
@@ -2610,7 +2548,7 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
       }
       head.push(`${count(state.problems.length, "root cause")}: ${INDEX_LEGEND}`);
       const tail = [
-        'In full: action "show" with ids. Every entry in brief: action "brief_all". Rules of a file: action "by_file". Search: action "find".',
+        'In full: action "show" with ids. Every entry in brief: action "brief_all". Rules of a file: action "by_file". Search: action "find". Scorecard: action "stats".',
         rulesPointer(),
       ];
       const text = paged({
@@ -2641,15 +2579,26 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
     case "find": {
       if (!isText(request.query))
         throw invalid('give the words to search for: action "find" with query');
-      const hits = searchProblems(state, request.query);
+      const hits = searchProblemsRanked(state, request.query);
       if (!hits.length) return { text: `no entry contains: ${request.query}` };
       return {
         text: paged({
           command: `SIM find ${request.query}`,
           page: request.page,
-          units: hits.map(indexLine),
+          units: hits.map((hit) => indexLine(hit.problem)),
         }),
       };
+    }
+    case "stats": {
+      const { index, full } = sizeTokens(state);
+      const report = buildSimStats(state, {
+        nowMs: Date.now(),
+        ...(request.staleDays !== undefined ? { staleDays: request.staleDays } : {}),
+        indexTokens: index,
+        fullTokens: full,
+      });
+      const body = renderSimStats(report);
+      return { text: head.length > 0 ? `${head.join("\n")}\n\n${body}` : body };
     }
     case "show":
     case "brief_all": {
@@ -2761,10 +2710,7 @@ function renderCheck(
       `note: ${count(events.length, "journal event")} of the last ${SEEN_DAYS} days (${events[0]} to ${events[events.length - 1]}) came from ${who}. Session ids are taken on trust: check that these events are genuine.`,
     );
   }
-  const index = estimateTokens(renderIndex(state));
-  const full = estimateTokens(
-    state.problems.map((problem) => renderProblem(state, problem)).join("\n\n"),
-  );
+  const { index, full } = sizeTokens(state);
   notes.push(
     `size: index about ${index} tokens (budget ${SIM_INDEX_BUDGET}), everything about ${full} tokens (budget ${SIM_FULL_BUDGET})`,
   );

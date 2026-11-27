@@ -109,10 +109,14 @@ describe("searchProblemsRanked", () => {
   const formatting = problem("F", "Formatting", [attempt("A3", { what: "Indent shell scripts" })]);
   const search = simState([hooks, retry, formatting]);
 
-  it("returns only problems where every word matches, exactly or by stem", () => {
+  it("requires every word when full matches exist and falls back to partial ranked matches when none match all words", () => {
     const ids = searchProblemsRanked(search, "hook timeout").map((hit) => hit.problem.id);
     assert.deepStrictEqual(ids, ["H"]);
-    assert.deepStrictEqual(searchProblemsRanked(search, "hook zebra"), []);
+    assert.deepStrictEqual(
+      searchProblemsRanked(search, "hook zebra").map((hit) => hit.problem.id),
+      ["H"],
+    );
+    assert.deepStrictEqual(searchProblemsRanked(search, "unknown zebra"), []);
   });
 
   it("marks a query that matches stems only as stemmed, and exact words as exact", () => {
@@ -147,6 +151,8 @@ describe("searchProblemsRanked filters", () => {
   it("filters on status, file and model, and combines them", () => {
     assert.deepStrictEqual(idsFor("status:missed"), ["M"]);
     assert.deepStrictEqual(idsFor("status:open"), ["O"]);
+    assert.deepStrictEqual(idsFor("status:live"), ["M", "O"]);
+    assert.deepStrictEqual(idsFor("status:nolive"), []);
     assert.deepStrictEqual(idsFor("file:web.md"), ["O"]);
     assert.deepStrictEqual(idsFor("model:other-model"), ["O"]);
     assert.deepStrictEqual(idsFor("status:open model:gpt-test"), []);

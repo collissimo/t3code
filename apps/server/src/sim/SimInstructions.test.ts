@@ -385,6 +385,23 @@ describe("buildSimThreadInstructions", () => {
     );
     assert.notInclude(guide({ advisorModelSelection: null }), "delegate_task` (`role");
   });
+
+  it("caps withheld rule anchors in the guide section to stay within budget", () => {
+    const manyRules = Array.from(
+      { length: 12 },
+      (_, idx) => `- Synthetic rule number ${idx + 1} with anchor text.`,
+    ).join("\n");
+    using fixture = makeFixture({ "AGENTS.md": `# Rules\n${manyRules}\n` });
+    const attempts = Array.from({ length: 12 }, (_, idx) =>
+      attempt(`A${idx + 1}`, `Synthetic rule number ${idx + 1} with anchor`, {
+        observations: [observation("misfired", "gpt-test")],
+      }),
+    );
+    const sections = buildSimThreadInstructions(fixture.input({ simState: simState(attempts) }));
+    const guide = sections.at(-1)!;
+    assert.include(guide, ", +4 more. Do not follow them here.");
+    assert.isAtMost(Buffer.byteLength(guide, "utf8"), SIM_SECTION_MAX_UTF8_BYTES);
+  });
 });
 
 describe("createSimInstructionCache", () => {

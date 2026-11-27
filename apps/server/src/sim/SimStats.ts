@@ -1,5 +1,8 @@
 import {
-  SIM_UNKNOWN,
+  effectiveHarness,
+  ownReport,
+  settlesFix,
+  standing,
   type SimAttempt,
   type SimObservation,
   type SimProblem,
@@ -62,14 +65,6 @@ const tokenize = (text: string) =>
     .split(/[^\p{L}\p{N}]+/u)
     .filter((token) => token.length > 0);
 
-const bare = (id: string) => id.replace(/^(cc|t3):/, "");
-const known = (id: string | undefined): id is string => !!id && id !== SIM_UNKNOWN;
-const sameSession = (a: string, b: string) => a === b || bare(a) === bare(b);
-
-/** The harness a record was made under; Claude Code records written by sim.mjs carry none. */
-const effectiveHarness = (record: { readonly harness?: string | undefined; readonly by: string }) =>
-  record.harness ?? (record.by.startsWith("cc:") ? "claudeAgent" : undefined);
-
 // ── Shared views ─────────────────────────────────────────────────────
 
 interface Pair {
@@ -77,20 +72,8 @@ interface Pair {
   readonly attempt: SimAttempt;
 }
 
-const standing = (attempt: SimAttempt) => attempt.observations.filter((obs) => !obs.retracted);
-
 const pairsOf = (problem: SimProblem): Array<Pair> =>
   problem.attempts.filter((attempt) => !attempt.retracted).map((attempt) => ({ problem, attempt }));
-
-/** A fix only counts as settled when someone other than the changing session reported it. */
-function selfGraded(attempt: SimAttempt, obs: SimObservation): boolean {
-  if (obs.source === "self" || obs.by === SIM_UNKNOWN) return true;
-  const reporters = [obs.by, obs.also].filter(known);
-  const authors = [attempt.by, attempt.also].filter(known);
-  if (reporters.some((r) => authors.some((a) => sameSession(r, a)))) return true;
-  if (known(attempt.sample) && reporters.some((r) => sameSession(r, attempt.sample))) return true;
-  return attempt.by === SIM_UNKNOWN;
-}
 
 // ── Search ───────────────────────────────────────────────────────────
 
@@ -128,9 +111,20 @@ function filterMatches(filter: SimSearchFilter, pairs: ReadonlyArray<Pair>): boo
   return pairs.some(({ attempt }) => {
     switch (filter.key) {
       case "status":
-        return filter.value === "open"
-          ? attempt.accepted && attempt.live && attempt.pending.length > 0
-          : standing(attempt).some((obs) => obs.result === filter.value);
+        switch (filter.value) {
+          case "open":
+            return attempt.accepted && attempt.live && attempt.pending.length > 0;
+          case "live":
+            return attempt.live;
+          case "nolive":
+            return !attempt.live;
+          case "unconfirmed":
+            return standing(attempt).some(
+              (obs) => obs.result === "fixed" && !settlesFix(attempt, obs),
+            );
+          default:
+            return standing(attempt).some((obs) => obs.result === filter.value);
+        }
       case "file":
         return attempt.files.some((file) => file.toLowerCase().includes(filter.value));
       case "model":
@@ -154,17 +148,20 @@ function searchableText(problem: SimProblem, pairs: ReadonlyArray<Pair>): string
       attempt.why,
       attempt.anchor ?? "",
       attempt.expect ?? "",
+      attempt.rejected_because ?? "",
+      ...attempt.predicted,
       ...attempt.files,
-      ...standing(attempt).map((obs) => obs.evidence),
+      ...standing(attempt).flatMap((obs) => [obs.target ?? "", obs.evidence]),
     ]),
   ].join(" ");
 }
 
-/** Every free word must match, exactly or by stem; a name match adds to the score. */
+/** Match words by exact token or stem; with `requireAll: false`, require at least one word match. */
 function scoreWords(
   words: ReadonlyArray<string>,
   problem: SimProblem,
   pairs: ReadonlyArray<Pair>,
+  requireAll = true,
 ): { score: number; matchedBy: "exact" | "stemmed" } | undefined {
   const exact = new Set(tokenize(searchableText(problem, pairs)));
   const stems = new Set([...exact].map(stemSearchToken));
@@ -172,23 +169,35 @@ function scoreWords(
     tokenize([problem.name, ...problem.former_names].join(" ")).map(stemSearchToken),
   );
   let score = 0;
+  let matchedTerms = 0;
   let allExact = true;
   for (const word of words) {
     const stem = stemSearchToken(word);
-    if (exact.has(word)) score += 2;
-    else if (stems.has(stem)) {
+    if (exact.has(word)) {
+      score += 2;
+      matchedTerms += 1;
+    } else if (stems.has(stem)) {
       score += 1;
+      matchedTerms += 1;
       allExact = false;
-    } else return undefined;
+    } else if (requireAll) {
+      return undefined;
+    } else {
+      continue;
+    }
     if (nameStems.has(stem)) score += 1;
   }
-  return { score, matchedBy: allExact ? "exact" : "stemmed" };
+  if (matchedTerms === 0) return undefined;
+  return {
+    score: matchedTerms * 10 + score,
+    matchedBy: allExact && matchedTerms === words.length ? "exact" : "stemmed",
+  };
 }
 
 /**
- * Ranks problems for a query. Words match case-insensitively, exactly or by stem. `key:value`
- * filters (`status:missed`, `status:open`, `file:`, `model:`, `harness:`) must all match.
- * An empty query returns nothing.
+ * Ranks problems for a query. Words match case-insensitively, exactly or by stem, falling back to
+ * partial multi-word matching when strict AND matching returns zero entries. `key:value` filters
+ * (`status:open|missed|misfired|unconfirmed|live|nolive`, `file:`, `model:`, `harness:`) must all match.
  */
 export function searchProblemsRanked(
   state: SimState,
@@ -197,6 +206,7 @@ export function searchProblemsRanked(
 ): Array<SimSearchHit> {
   const { words, filters } = parseQuery(query);
   if (words.length === 0 && filters.length === 0) return [];
+  const candidates: Array<{ problem: SimProblem; pairs: Array<Pair> }> = [];
   const hits: Array<SimSearchHit> = [];
   for (const problem of state.problems) {
     const pairs = pairsOf(problem);
@@ -205,8 +215,15 @@ export function searchProblemsRanked(
       hits.push({ problem, score: 0, matchedBy: "filter" });
       continue;
     }
-    const scored = scoreWords(words, problem, pairs);
+    candidates.push({ problem, pairs });
+    const scored = scoreWords(words, problem, pairs, true);
     if (scored) hits.push({ problem, ...scored });
+  }
+  if (hits.length === 0 && words.length >= 2) {
+    for (const { problem, pairs } of candidates) {
+      const partial = scoreWords(words, problem, pairs, false);
+      if (partial) hits.push({ problem, ...partial });
+    }
   }
   return hits.sort((a, b) => b.score - a.score).slice(0, options.limit ?? DEFAULT_SEARCH_LIMIT);
 }
@@ -244,7 +261,7 @@ const OUTCOMES: ReadonlyArray<keyof OutcomeCounts> = [
 
 function outcomeOf(attempt: SimAttempt, obs: SimObservation): Outcome {
   if (obs.result !== "fixed") return obs.result;
-  return selfGraded(attempt, obs) ? "unconfirmed" : "fixed";
+  return ownReport(attempt, obs) === null ? "fixed" : "unconfirmed";
 }
 
 function countOutcomes(outcomes: ReadonlyArray<Outcome>): OutcomeCounts {
@@ -416,7 +433,7 @@ export function buildSimStats(state: SimState, options: SimStatsOptions): SimSta
       })),
     recurringFailures,
     staleOpen: live
-      .filter(({ attempt }) => attempt.pending.length > 0)
+      .filter(({ attempt }) => attempt.pending.length > 0 && attempt.fixed.length === 0)
       .flatMap(({ problem, attempt }) => {
         const opened = roundMs(attempt.round);
         return opened !== undefined && opened < cutoff
