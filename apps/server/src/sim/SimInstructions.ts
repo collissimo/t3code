@@ -236,14 +236,17 @@ const domainApplies = (domain: string, context: RuleContext) =>
   sameName(domain, "unknown") ||
   sameName(domain, context.projectName);
 
-/** The latest standing outcome under this model and harness decides; a later fix clears a misfire. */
+/**
+ * The latest standing outcome under this model, harness and domain decides; a later fix clears a misfire.
+ */
 function misfiredHere(attempt: SimAttempt, context: RuleContext): boolean {
   const latest = attempt.observations
     .filter(
       (obs) =>
         obs.retracted === undefined &&
         sameName(obs.policy, context.model) &&
-        harnessApplies(obs.harness, context),
+        harnessApplies(obs.harness, context) &&
+        domainApplies(obs.domain, context),
     )
     .at(-1);
   return latest?.result === "misfired";
@@ -260,11 +263,25 @@ function removedHere(attempt: SimAttempt, context: RuleContext): boolean {
   );
 }
 
+/** A rule SIM withholds for this thread, shown in the guide so the agent knows it exists. */
+interface SimWithheldRule {
+  readonly anchor: string;
+  readonly reason: "misfired" | "removed";
+}
+
+type RuleVerdict =
+  | { readonly keep: true }
+  | { readonly keep: false; readonly withheld?: SimWithheldRule };
+
 /** Rules without a SIM entry always stay: SIM may only narrow what the user wrote. */
-function keepRule(text: string, refs: ReadonlyArray<AttemptRef>, context: RuleContext): boolean {
+function ruleVerdict(
+  text: string,
+  refs: ReadonlyArray<AttemptRef>,
+  context: RuleContext,
+): RuleVerdict {
   const normalized = normalizeText(text);
   const matches = refs.filter((ref) => normalized.includes(ref.anchor));
-  if (matches.length === 0) return true;
+  if (matches.length === 0) return { keep: true };
   const live = matches.filter((ref) => ref.attempt.live);
   if (live.length > 0) {
     const inDomain = live.filter((ref) => domainApplies(ref.attempt.domain, context));
@@ -272,17 +289,22 @@ function keepRule(text: string, refs: ReadonlyArray<AttemptRef>, context: RuleCo
       (best, ref) => (best === undefined || ref.order > best.order ? ref : best),
       undefined,
     );
-    return newest !== undefined && !misfiredHere(newest.attempt, context);
+    if (newest === undefined) return { keep: false };
+    if (!misfiredHere(newest.attempt, context)) return { keep: true };
+    return { keep: false, withheld: { anchor: newest.anchor, reason: "misfired" } };
   }
-  return !matches.some((ref) => removedHere(ref.attempt, context));
+  const removed = matches.find((ref) => removedHere(ref.attempt, context));
+  if (removed === undefined) return { keep: true };
+  return { keep: false, withheld: { anchor: removed.anchor, reason: "removed" } };
 }
 
 function filterBlocks(
   blocks: ReadonlyArray<Block>,
   refs: ReadonlyArray<AttemptRef>,
   context: RuleContext,
-): Array<Block> {
+): { readonly blocks: Array<Block>; readonly withheld: Array<SimWithheldRule> } {
   const kept: Array<Block> = [];
+  const withheld: Array<SimWithheldRule> = [];
   let droppedIndent: number | undefined;
   for (const block of blocks) {
     if (block.kind === "heading") {
@@ -292,13 +314,15 @@ function filterBlocks(
     }
     if (droppedIndent !== undefined && block.bullet && block.indent > droppedIndent) continue;
     droppedIndent = undefined;
-    if (keepRule(block.lines.join("\n"), refs, context)) {
+    const verdict = ruleVerdict(block.lines.join("\n"), refs, context);
+    if (verdict.keep) {
       kept.push(block);
-    } else if (block.bullet) {
-      droppedIndent = block.indent;
+      continue;
     }
+    if (verdict.withheld !== undefined) withheld.push(verdict.withheld);
+    if (block.bullet) droppedIndent = block.indent;
   }
-  return kept.filter((block, index) => {
+  const visible = kept.filter((block, index) => {
     if (block.kind !== "heading") return true;
     for (const next of kept.slice(index + 1)) {
       if (next.kind === "rule") return true;
@@ -306,6 +330,7 @@ function filterBlocks(
     }
     return false;
   });
+  return { blocks: visible, withheld };
 }
 
 // ── Packing into Codex-sized sections ────────────────────────────────
@@ -404,7 +429,11 @@ function packRuleSections(
 
 // ── SIM tool guide ───────────────────────────────────────────────────
 
-function simGuideSection(settings: SimSettingsConfig, omitted: ReadonlyArray<string>): string {
+function simGuideSection(
+  settings: SimSettingsConfig,
+  omitted: ReadonlyArray<string>,
+  withheld: ReadonlyArray<SimWithheldRule>,
+): string {
   const advisor = settings.advisorModelSelection;
   const lines = [
     "## Self-Improvement Memory (SIM)",
@@ -422,6 +451,11 @@ function simGuideSection(settings: SimSettingsConfig, omitted: ReadonlyArray<str
       ? []
       : [
           `- Not every harness rule fit here. Read ${omitted.map((file) => `\`${file}\``).join(", ")} for the rest.`,
+        ]),
+    ...(withheld.length === 0
+      ? []
+      : [
+          `- SIM withheld these rules from this thread: ${withheld.map((rule) => `"${rule.anchor}" (${rule.reason})`).join(", ")}. Do not follow them here.`,
         ]),
   ];
   return truncateUtf8(lines.join("\n"), SIM_SECTION_MAX_UTF8_BYTES);
@@ -483,15 +517,18 @@ export function buildSimThreadInstructions(
 
   const attemptsByFile = indexAttemptsByFile(input.simState, paths);
   const files: Array<RuleFile> = [];
+  // Keyed by reason and anchor so a rule SIM attaches to several files is listed once.
+  const withheld = new Map<string, SimWithheldRule>();
   for (const path of ruleFilePaths) {
     const text = readRuleFile(path);
     if (text === undefined) continue;
     const label = canonicalHarnessFile(path, paths);
-    const blocks = filterBlocks(parseRuleFile(text), attemptsByFile.get(label) ?? [], input);
-    if (blocks.length > 0) files.push({ label, blocks });
+    const filtered = filterBlocks(parseRuleFile(text), attemptsByFile.get(label) ?? [], input);
+    for (const rule of filtered.withheld) withheld.set(`${rule.reason}\u0000${rule.anchor}`, rule);
+    if (filtered.blocks.length > 0) files.push({ label, blocks: filtered.blocks });
   }
   const { sections, omitted } = packRuleSections(files, SIM_MAX_INJECTED_SECTIONS - 1);
-  return [...sections, simGuideSection(settings, omitted)];
+  return [...sections, simGuideSection(settings, omitted, [...withheld.values()])];
 }
 
 function simInstructionCacheKey(input: {

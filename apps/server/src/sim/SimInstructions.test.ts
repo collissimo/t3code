@@ -286,6 +286,46 @@ describe("buildSimThreadInstructions", () => {
     assert.include(rules({ simState: removedState, model: "gpt-other" }), "Run the focused tests");
   });
 
+  it("withholds a misfire only in the domain SIM recorded it for", () => {
+    using fixture = makeFixture({ "AGENTS.md": RULES });
+    const state = simState([
+      attempt("A1", "Run the focused tests before every push", {
+        observations: [{ ...observation("misfired", "gpt-test", "codex"), domain: "billing" }],
+      }),
+    ]);
+    const guide = (projectName: string) =>
+      buildSimThreadInstructions(fixture.input({ simState: state, projectName })).at(-1)!;
+    const rules = (projectName: string) =>
+      buildSimThreadInstructions(fixture.input({ simState: state, projectName }))
+        .slice(0, -1)
+        .join("\n");
+
+    assert.include(rules("web"), "Run the focused tests");
+    assert.notInclude(guide("web"), "SIM withheld", "nothing withheld means no withheld line");
+    assert.notInclude(rules("billing"), "Run the focused tests");
+    assert.include(guide("billing"), '"Run the focused tests before every push" (misfired)');
+  });
+
+  it("lists a withheld removal in the guide once, however many files carry it", () => {
+    using fixture = makeFixture({
+      "AGENTS.md": RULES,
+      "notes/extra.md": "- Indent shell scripts with two spaces always.\n",
+    });
+    const state = simState([
+      attempt("A1", "Indent shell scripts with two spaces", {
+        action: "remove",
+        live: false,
+        files: ["~/.claude/AGENTS.md", "~/.claude/notes/extra.md"],
+      }),
+    ]);
+    const guide = buildSimThreadInstructions(
+      fixture.input({ simState: state, sim: { ruleFiles: ["~/.claude/notes/extra.md"] } }),
+    ).at(-1)!;
+
+    assert.include(guide, '"Indent shell scripts with two spaces" (removed)');
+    assert.lengthOf(guide.split('"Indent shell scripts with two spaces" (removed)'), 2);
+  });
+
   it("keeps every section under Codex's byte limit with multi-byte text", () => {
     const bullets = Array.from(
       { length: 400 },
@@ -360,10 +400,9 @@ describe("createSimInstructionCache", () => {
     misfiring.observations.push(observation("misfired", "gpt-test"));
     assert.strictEqual(cache.resolve({ ...input, contextEpoch: 1 }), first);
 
-    assert.notInclude(
-      cache.resolve({ ...input, contextEpoch: 2 }).join("\n"),
-      "Run the focused tests",
-    );
+    const refreshed = cache.resolve({ ...input, contextEpoch: 2 });
+    assert.notInclude(refreshed.slice(0, -1).join("\n"), "Run the focused tests");
+    assert.include(refreshed.at(-1)!, '"Run the focused tests before every push" (misfired)');
     assert.deepEqual(
       cache.resolve({
         ...input,
