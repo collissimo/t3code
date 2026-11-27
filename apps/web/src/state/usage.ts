@@ -154,12 +154,8 @@ function deriveSelection(
   };
 }
 
-export function useUsage(
-  input: UsageSummaryInput,
-  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
-  hiddenProviders: ReadonlySet<UsageProviderKind> = NO_HIDDEN_PROVIDERS,
-): UsageView {
-  const windowKey = JSON.stringify({
+function usageWindowKey(input: UsageSummaryInput) {
+  return JSON.stringify({
     sinceDay: input.sinceDay,
     untilDay: input.untilDay,
     timeZone: input.timeZone,
@@ -167,6 +163,22 @@ export function useUsage(
     sinceTime: input.sinceTime,
     untilTime: input.untilTime,
   });
+}
+
+/** Every environment's usage for one window, merged; null until one of them answers. */
+export function useMergedUsage(input: UsageSummaryInput): MergedUsage | null {
+  const environments = useAtomValue(usageByWindowAtom(usageWindowKey(input)));
+  return environments.some((environment) => environment.summary !== null)
+    ? mergeAnsweredUsage(environments)
+    : null;
+}
+
+export function useUsage(
+  input: UsageSummaryInput,
+  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+  hiddenProviders: ReadonlySet<UsageProviderKind> = NO_HIDDEN_PROVIDERS,
+): UsageView {
+  const windowKey = usageWindowKey(input);
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
   // Identity-based render sync needs a derivation retained by inputs across renders.
