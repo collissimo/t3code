@@ -4,6 +4,7 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
   type UsageLimitSourceSnapshots,
+  type UsageProviderKind,
 } from "@t3tools/contracts";
 import {
   collectLimitAccounts,
@@ -15,6 +16,9 @@ import {
   type LimitPoolWindow,
 } from "@t3tools/shared/usageLimits";
 import { limitsNotice } from "@t3tools/shared/usageLimitsCopy";
+import type { MergedUsage } from "@t3tools/shared/usageMerge";
+
+import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "../usage/usageProviders";
 
 export type ThreadDetailsLimits =
   | { readonly kind: "instance"; readonly limits: ServerProviderUsageLimits }
@@ -63,6 +67,29 @@ export function resolveThreadHttpQuotas(
         )
       : [],
   );
+}
+
+/** The usage history kind a thread's provider records under, when its local transcripts are read. */
+export function threadUsageProviderKind(
+  providerInstanceId: ProviderInstanceId | null,
+  providers: readonly ServerProvider[],
+): UsageProviderKind | null {
+  const driver = providers.find((entry) => entry.instanceId === providerInstanceId)?.driver;
+  return PROVIDER_ORDER.find((kind) => PROVIDER_PRESENTATION[kind].driverKind === driver) ?? null;
+}
+
+/** One provider's tokens and cost on `today` and across the whole merged window. */
+export function providerUsageTotals(
+  merged: MergedUsage,
+  provider: UsageProviderKind,
+  today: string,
+) {
+  const day = merged.daily.find((entry) => entry.day === today)?.byProvider.get(provider);
+  const window = merged.providers.find((entry) => entry.provider === provider);
+  return {
+    today: { totalTokens: day?.totalTokens ?? 0, costUsd: day?.costUsd ?? 0 },
+    window: { totalTokens: window?.totalTokens ?? 0, costUsd: window?.costUsd ?? 0 },
+  };
 }
 
 export function nextPoolReset(window: LimitPoolWindow, now: number) {

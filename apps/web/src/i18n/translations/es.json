@@ -13057,5 +13057,13 @@
     " más en Elementos vinculados"
   ],
   "1350741e3ff104f6": "Desactivar el modo orquestador",
-  "9991b89622516f52": "Modo orquestador"
+  "9991b89622516f52": "Modo orquestador",
+  "e811a3d455329ebc": "Hoy",
+  "93d391fe57eeb8aa": "{provider} hoy",
+  "aa964ba93eb0f4bc": "{days} días",
+  "bf5dfcc0ae724c1f": "{provider}, últimos {days} días",
+  "11a5a798041da0a8": "{tokens} tokens",
+  "a54573109f6923ff": "{period}: {tokens} tokens · {cost}",
+  "01bb10bdc8aeb67d": "{period}: {tokens} tokens",
+  "dadf807b7345a19d": "{provider} no informa de límites; esto cuenta su historial local."
 }

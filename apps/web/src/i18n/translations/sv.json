@@ -13069,5 +13069,13 @@
     " till i Länkade objekt"
   ],
   "1350741e3ff104f6": "Stäng av orkestreringsläge",
-  "9991b89622516f52": "Orkestreringsläge"
+  "9991b89622516f52": "Orkestreringsläge",
+  "e811a3d455329ebc": "I dag",
+  "93d391fe57eeb8aa": "{provider} i dag",
+  "aa964ba93eb0f4bc": "{days} dagar",
+  "bf5dfcc0ae724c1f": "{provider}, senaste {days} dagarna",
+  "11a5a798041da0a8": "{tokens} tokens",
+  "a54573109f6923ff": "{period}: {tokens} tokens · {cost}",
+  "01bb10bdc8aeb67d": "{period}: {tokens} tokens",
+  "dadf807b7345a19d": "{provider} rapporterar inga gränser; detta räknar dess lokala historik."
 }

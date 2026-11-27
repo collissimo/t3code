@@ -4,6 +4,7 @@ import type {
   ServerProviderUsageLimits,
   ServerProviderUsageWindow,
   UsageLimitSourceSnapshots,
+  UsageProviderKind,
 } from "@t3tools/contracts";
 import {
   type LimitPace,
@@ -13,6 +14,7 @@ import {
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
 import { formatDuration, limitsNotice } from "@t3tools/shared/usageLimitsCopy";
+import { formatTokens, formatUsd, makeWindow } from "@t3tools/shared/usageFormat";
 import { Link } from "@tanstack/react-router";
 import { msg, useGT, useLocale, useMessages } from "gt-react";
 import type { ReactNode } from "react";
@@ -22,15 +24,19 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
+import { useMergedUsage } from "../../state/usage";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { PROVIDER_PRESENTATION } from "../usage/usageProviders";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import {
   nextPoolReset,
   poolSources,
+  providerUsageTotals,
   resolveThreadDetailsLimits,
   resolveThreadHttpQuotas,
+  threadUsageProviderKind,
 } from "./ThreadDetailsUsage.logic";
 
 const PACE_LABEL: Record<LimitPace, string> = {
@@ -67,7 +73,11 @@ export function ThreadDetailsUsage({
   const now = Date.parse(`${nowMinute}:00Z`);
   const resolved = resolveThreadDetailsLimits(providerInstanceId, model, providers, sources, now);
   const quotas = resolveThreadHttpQuotas(providerInstanceId, sources);
-  if (!resolved && quotas.length === 0) return null;
+  if (!resolved && quotas.length === 0) {
+    // Providers that report no limits, like Antigravity, still show what their local history counted.
+    const historyProvider = threadUsageProviderKind(providerInstanceId, providers);
+    return historyProvider ? <ThreadDetailsHistoryUsage provider={historyProvider} /> : null;
+  }
 
   return (
     <ThreadDetailsSection
@@ -85,6 +95,74 @@ export function ThreadDetailsUsage({
         {quotas.map(({ key, accountLabel, window }) => (
           <LimitRow key={key} window={window} now={now} accountLabel={accountLabel} />
         ))}
+      </div>
+    </ThreadDetailsSection>
+  );
+}
+
+const HISTORY_DAYS = 7;
+
+function ThreadDetailsHistoryUsage({ provider }: { readonly provider: UsageProviderKind }) {
+  const gt = useGT();
+  const locale = useLocale();
+  const nowMinute = useNowMinute();
+  const window = makeWindow(HISTORY_DAYS, new Date(`${nowMinute}:00Z`));
+  const merged = useMergedUsage(window);
+  if (!merged) return null;
+  const totals = providerUsageTotals(merged, provider, window.untilDay);
+  const name = PROVIDER_PRESENTATION[provider].label;
+  const rows = [
+    {
+      key: "today",
+      label: gt("Today", { $context: "usage history row label" }),
+      period: gt("{provider} today", { provider: name }),
+      ...totals.today,
+    },
+    {
+      key: "window",
+      label: gt("{days} days", { days: HISTORY_DAYS }),
+      period: gt("{provider}, last {days} days", { provider: name, days: HISTORY_DAYS }),
+      ...totals.window,
+    },
+  ];
+  return (
+    <ThreadDetailsSection
+      headingId="thread-details-usage-heading"
+      title={gt("Usage")}
+      showHeading={false}
+    >
+      <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
+        {rows.map((row) => {
+          const tokens = formatTokens(row.totalTokens);
+          return (
+            <UsageRow
+              key={row.key}
+              label={row.label}
+              fill={null}
+              tone={null}
+              value={gt("{tokens} tokens", { tokens })}
+              opensUsage
+              tooltip={
+                <>
+                  <span className="text-foreground">
+                    {row.costUsd > 0
+                      ? gt("{period}: {tokens} tokens · {cost}", {
+                          period: row.period,
+                          tokens,
+                          cost: formatUsd(row.costUsd, locale),
+                        })
+                      : gt("{period}: {tokens} tokens", { period: row.period, tokens })}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {gt("{provider} reports no limits; this counts its local history.", {
+                      provider: name,
+                    })}
+                  </span>
+                </>
+              }
+            />
+          );
+        })}
       </div>
     </ThreadDetailsSection>
   );

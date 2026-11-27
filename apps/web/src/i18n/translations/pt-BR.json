@@ -13062,5 +13062,13 @@
     " mais em Itens vinculados"
   ],
   "1350741e3ff104f6": "Desativar o modo orquestrador",
-  "9991b89622516f52": "Modo orquestrador"
+  "9991b89622516f52": "Modo orquestrador",
+  "e811a3d455329ebc": "Hoje",
+  "93d391fe57eeb8aa": "{provider} hoje",
+  "aa964ba93eb0f4bc": "{days} dias",
+  "bf5dfcc0ae724c1f": "{provider}, últimos {days} dias",
+  "11a5a798041da0a8": "{tokens} tokens",
+  "a54573109f6923ff": "{period}: {tokens} tokens · {cost}",
+  "01bb10bdc8aeb67d": "{period}: {tokens} tokens",
+  "dadf807b7345a19d": "{provider} não informa limites; isto conta o histórico local."
 }
