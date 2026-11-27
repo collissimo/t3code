@@ -199,6 +199,132 @@ const providerThread = (id: string, nativeId: string) =>
     status: "active",
   });
 
+describe("detectShellWriteTargets", () => {
+  it.each([
+    {
+      name: "skips devices",
+      command: "make > /dev/null 2> /dev/stderr | tee /dev/tty /dev/fd/3",
+      targets: [],
+    },
+    {
+      name: "skips backups but keeps a moved original",
+      command:
+        "cp AGENTS.md AGENTS.md.bak; cp a ~/.claude/backups/a; echo x > b.bak-1; mv CLAUDE.md CLAUDE.md.bak",
+      targets: ["CLAUDE.md"],
+    },
+    {
+      name: "follows cd into a home path",
+      command: "cd ~/.claude && echo rule >> AGENTS.md; touch /etc/hosts ~/notes.md",
+      cwd: "/work",
+      targets: ["~/.claude/AGENTS.md", "/etc/hosts", "~/notes.md"],
+    },
+    {
+      name: "follows relative and repeated cd",
+      command: "cd sub && echo x >> CLAUDE.md; cd ..\necho y > a",
+      cwd: "/work",
+      targets: ["/work/sub/CLAUDE.md", "/work/a"],
+    },
+    {
+      name: "keeps a relative cd relative without a start directory",
+      command: "cd sub && echo x > a",
+      targets: ["sub/a"],
+    },
+    {
+      name: "keeps the cd of a guarded command",
+      command: 'cd "$HOME/.claude/notes" || exit 1; echo x > a.md',
+      targets: ["$HOME/.claude/notes/a.md"],
+    },
+    {
+      name: "restores the directory after a subshell",
+      command: "(cd sub && echo x > in.md) > log; echo y > out.md",
+      cwd: "/work",
+      targets: ["/work/sub/in.md", "/work/log", "/work/out.md"],
+    },
+    {
+      name: "ignores a cd in a pipeline, a background job, or a fallback",
+      command: "cd p | cat; cd bg & true ||\ncd q; cd a || cd b; echo > f",
+      cwd: "/work",
+      targets: ["/work/a/f"],
+    },
+    {
+      name: "reads past line continuations and shell keywords",
+      command: "cd /d && \\\n  sed -i s/a/b/ x; if true; then rm y; else touch z; fi; { tee w; }",
+      targets: ["/d/x", "/d/y", "/d/z", "/d/w"],
+    },
+    {
+      name: "drops relative paths after an unresolvable cd",
+      command: 'cd "$DIR" && echo x > AGENTS.md; rm /abs/y; cd - && rm z; cd /known && rm w',
+      cwd: "/work",
+      targets: ["/abs/y", "/known/w"],
+    },
+    {
+      name: "takes the target directory over the last operand",
+      command:
+        "cp -t /one a; cp --target-directory=/two a; ln -s -t/three a; cp -rt /four a; install --target-directory /five -m 644 a",
+      targets: ["/one", "/two", "/three", "/four", "/five"],
+    },
+    {
+      name: "keeps the removed sources of mv -t",
+      command: "mv -t /dest a",
+      targets: ["/dest", "a"],
+    },
+    {
+      name: "skips option arguments",
+      command: "rsync -t src /dest --exclude cache; install a /bin/b -m 755; cp a /c -S .orig",
+      targets: ["/dest", "/bin/b", "/c"],
+    },
+    {
+      name: "skips touch timestamps and references",
+      command:
+        "touch -d 2026-01-01 a; touch -r ref b; touch -amt 202601010000 c; touch --date yesterday d; touch --reference=ref e",
+      targets: ["a", "b", "c", "d", "e"],
+    },
+    {
+      name: "reads SIM tools run by a JS runner as no write",
+      command: "node ~/.claude/sim/sim.mjs attempt --what x; bun sim-audit.mjs",
+      targets: [],
+    },
+    {
+      name: "reports commands that overwrite or remove SIM tools",
+      command: "cp evil.js sim.mjs; rm sim-audit.mjs",
+      targets: ["sim.mjs", "sim-audit.mjs"],
+    },
+  ])("$name", ({ command, cwd, targets }) => {
+    assert.deepStrictEqual(SimObserverReactor.detectShellWriteTargets(command, cwd), targets);
+  });
+});
+
+describe("isCodeReviewTask", () => {
+  it.each([
+    ["Check the parser diff", "Look at the change."],
+    ["Review the parser refactor", "Review the diff for bugs"],
+    ["Re-check", "Look at PR 12 again."],
+    ["Adversarial review", ""],
+    ["Diff auditor", ""],
+    ["Code auditor", ""],
+    ["Independent grader", ""],
+    ["SIM audit", ""],
+    ["sim review", ""],
+    ["Round 2 review", ""],
+    ["Verify review findings", ""],
+  ])("accepts %s", (title, prompt) => {
+    assert.isTrue(SimObserverReactor.isCodeReviewTask(title, prompt));
+  });
+
+  it.each([
+    [
+      "Pollen forecast evidence and safety",
+      "Review the clinical evidence and report your findings.",
+    ],
+    ["Verify email draft", "Check the tone and give a verdict."],
+    ["review the clinical evidence", ""],
+    ["Implement the parser", `${"Handle every token. ".repeat(40)}Verify with the tests.`],
+    ["Plot the gradient", "Use the code in the notebook."],
+  ])("rejects %s", (title, prompt) => {
+    assert.isFalse(SimObserverReactor.isCodeReviewTask(title, prompt));
+  });
+});
+
 describe("SimObserverReactor", () => {
   it.effect(
     "resets the seen epoch once per completed compaction, handoff, and context switch",
@@ -283,6 +409,18 @@ describe("SimObserverReactor", () => {
           },
         ]);
       }),
+  );
+
+  it.effect("reports a harness edit made by name after cd into the harness dir", () =>
+    Effect.gen(function* () {
+      const { reactor, telemetry } = yield* setup({ worktreePath: "/work/repo" });
+      yield* reactor.handle(command("item-cd", "cd ~/.claude/notes && echo rule >> build.md"));
+      yield* reactor.handle(runEvent("run.updated", makeRun(RUN_ID, "completed")));
+      assert.deepStrictEqual(
+        telemetry().map((entry) => ("files" in entry ? entry.files : [])),
+        [["~/.claude/notes/build.md"]],
+      );
+    }),
   );
 
   it.effect.each([
@@ -495,6 +633,8 @@ describe("SimObserverReactor", () => {
         });
       const verdict = `Verdict: ship it. ${"x".repeat(400)}`;
       yield* reactor.handle(subagent("task-impl", "Implement the parser", "Done."));
+      // A review word in the result alone says nothing about what the task asked for.
+      yield* reactor.handle(subagent("task-wording", "Implement the lexer", verdict));
       yield* reactor.handle(subagent("task-review", "Check the parser diff", verdict));
       yield* reactor.handle(subagent("task-review", "Check the parser diff", verdict));
       const reports = telemetry();

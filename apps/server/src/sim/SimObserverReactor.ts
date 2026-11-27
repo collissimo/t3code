@@ -46,7 +46,15 @@ export class SimObserverReactor extends Context.Service<
 const MEMORY_CAP = 512;
 const EXCERPT_LIMIT = 300;
 const TERMINAL_RUN_STATUSES = new Set(["completed", "interrupted", "failed", "cancelled"]);
-const REVIEW_PATTERN = /\b(review|audit|findings|verdict|critic|grade|grader)\b/i;
+const REVIEW_TERM =
+  /\b(?:review\w*|re-?check\w*|audit\w*|verif\w*|grad(?:e|ed|es|er|ers|ing)|critics?|critiques?|(?:gegen)?prüf\w*)\b/i;
+const CODE_CUE =
+  /\b(?:code(?:base)?|diffs?|PRs?|pull requests?|branch(?:es)?|commits?|patch(?:es)?|repo(?:s|sitory|sitories)?|harness|SIM|tests?|adversarial)\b/i;
+// Any research prompt asks for "findings" or a "verdict", so these only count in a title.
+const VERDICT_CUE = /\b(?:findings|verdict)\b/i;
+const REVIEW_ROLE =
+  /\b(?:independent grader|round[- ]?\d+ (?:re-?)?review|check(?:ing)? (?:[\w-]+ ){0,3}(?:diffs?|patch(?:es)?|pull request|PR))\b/i;
+const REVIEW_PROMPT_OPENING = 600;
 const CLAUDE_DRIVER = "claudeAgent";
 
 /** Insertion-ordered map that drops its oldest entry past the cap, so a long-lived server never grows it. */
@@ -60,6 +68,14 @@ function firstSighting(seen: Map<string, true>, key: string): boolean {
   if (seen.has(key)) return false;
   remember(seen, key, true);
   return true;
+}
+
+/** Whether a delegated task asks for a review of code or the harness, by its title and opening. */
+export function isCodeReviewTask(title: string, prompt = ""): boolean {
+  // Prompts close with boilerplate such as "verify with the tests", so only the opening counts.
+  const text = `${title}\n${prompt.slice(0, REVIEW_PROMPT_OPENING)}`;
+  if (REVIEW_ROLE.test(text)) return true;
+  return REVIEW_TERM.test(text) && (CODE_CUE.test(text) || VERDICT_CUE.test(title));
 }
 
 /** Calendar day in the server's zone, matching how standalone sim.mjs stamps `day` and `round`. */
@@ -84,7 +100,7 @@ const stripHeredocBodies = (command: string) =>
   );
 
 function tokenizeShell(raw: string): Array<ShellToken> {
-  const source = stripHeredocBodies(raw);
+  const source = stripHeredocBodies(raw).replace(/\\\r?\n/g, "");
   const tokens: Array<ShellToken> = [];
   let index = 0;
   while (index < source.length) {
@@ -147,26 +163,62 @@ function tokenizeShell(raw: string): Array<ShellToken> {
   return tokens;
 }
 
-const COMMAND_WRAPPERS = new Set(["sudo", "env", "command", "builtin", "nohup", "time", "exec"]);
+/** Programs and shell keywords that come before the command that does the work. */
+const COMMAND_WRAPPERS = new Set(
+  "sudo env command builtin nohup time exec if then elif else while until do { !".split(" "),
+);
+// `node sim.mjs` needs no exemption: a JS runner writes no operand, while `cp x sim.mjs` must count.
 const ALL_ARG_WRITERS = new Set(["rm", "unlink", "truncate", "touch", "shred", "tee", "mv"]);
 const LAST_ARG_WRITERS = new Set(["cp", "install", "ln", "rsync"]);
-const SIM_TOOL_SCRIPT = /(?:^|\/)sim(?:-audit)?\.mjs$/;
+const SUFFIX_OPTION = /^(?:-[a-zA-Z]*S|--suffix)$/;
+/** Per command, the options whose following word is their argument rather than a file it writes. */
+const VALUE_OPTIONS = new Map([
+  ["touch", /^(?:-[acfhm]*[drt]|--date|--reference)$/],
+  ["cp", SUFFIX_OPTION],
+  ["mv", SUFFIX_OPTION],
+  ["ln", SUFFIX_OPTION],
+  ["install", /^(?:-[a-zA-Z]*[gmoS]|--(?:group|mode|owner|suffix))$/],
+  ["rsync", /^(?:-[a-zA-Z]*[ef]|--(?:rsh|filter|exclude|include|exclude-from|include-from))$/],
+]);
+const TARGET_DIR_OPTION = /^(?:--target-directory(?:=|$)|-(?:(?![gmoSt])[a-zA-Z])*t)(.*)$/;
+const DEVICE_TARGET = /^\/dev\/(?:null|stderr|stdout|tty|fd\/\d+)$/;
+const BACKUP_TARGET = /(?:^|\/)backups\/|\.bak(?:-|$)/;
+const HOME_PREFIX = /^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/;
+
+/** `words` from the command name on, past assignments, `sudo` and the like. */
+function commandWords(words: ReadonlyArray<ShellWord>): ReadonlyArray<ShellWord> {
+  const start = words.findIndex(
+    (word) =>
+      !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word.value) &&
+      !COMMAND_WRAPPERS.has(NodePath.basename(word.value)),
+  );
+  return start === -1 ? [] : words.slice(start);
+}
+
+/** The DIR of `-t DIR` or `--target-directory=DIR`, which takes the last operand's place. */
+function targetDirectory(args: ReadonlyArray<ShellWord>): ShellWord | undefined {
+  for (const [index, word] of args.entries()) {
+    const match = TARGET_DIR_OPTION.exec(word.value);
+    if (match) return match[1] ? { ...word, value: match[1] } : args[index + 1];
+  }
+  return undefined;
+}
 
 function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> {
-  let start = 0;
-  while (
-    start < words.length &&
-    (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[start]!.value) ||
-      COMMAND_WRAPPERS.has(NodePath.basename(words[start]!.value)))
-  ) {
-    start += 1;
-  }
-  const name = NodePath.basename(words[start]?.value ?? "");
-  const args = words.slice(start + 1);
-  if (args.some((word) => SIM_TOOL_SCRIPT.test(word.value))) return [];
-  const operands = args.filter((word) => !word.value.startsWith("-"));
-  if (ALL_ARG_WRITERS.has(name)) return operands;
-  if (LAST_ARG_WRITERS.has(name)) return operands.slice(-1);
+  const [command, ...args] = commandWords(words);
+  const name = NodePath.basename(command?.value ?? "");
+  const valueOption = VALUE_OPTIONS.get(name);
+  const operands = args.filter(
+    (word, index) =>
+      !word.value.startsWith("-") && !valueOption?.test(args[index - 1]?.value ?? ""),
+  );
+  // rsync's `-t` preserves times; for the others it names the destination.
+  const directory =
+    name !== "rsync" && (LAST_ARG_WRITERS.has(name) || name === "mv")
+      ? targetDirectory(args)
+      : undefined;
+  if (ALL_ARG_WRITERS.has(name)) return directory ? [...operands, directory] : operands;
+  if (LAST_ARG_WRITERS.has(name)) return directory ? [directory] : operands.slice(-1);
   if (name === "sed" || name === "perl") {
     const inPlace = args.some(
       (word) => /^-[a-zA-Z]*i/.test(word.value) || word.value.startsWith("--in-place"),
@@ -189,31 +241,82 @@ function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> 
   return [];
 }
 
-/** Conservative list of paths a Bash command writes, removes, or renames. Unresolvable expansions are skipped. */
-export function detectShellWriteTargets(command: string): Array<string> {
-  const targets: Array<ShellWord> = [];
+/**
+ * `path` as seen from the shell directory `cwd`, or null when that cannot be known. An empty `cwd`
+ * leaves a relative path for the caller to resolve.
+ */
+function resolveShellPath(cwd: string | null, path: string): string | null {
+  if (NodePath.isAbsolute(path) || HOME_PREFIX.test(path)) return path;
+  if (cwd === null || path.startsWith("~")) return null;
+  if (!cwd) return path;
+  if (!HOME_PREFIX.test(cwd)) return NodePath.join(cwd, path);
+  const joined = NodePath.posix.join(cwd, path);
+  return HOME_PREFIX.test(joined) ? joined : null;
+}
+
+/** The shell directory after one command: moved by `cd`, null when its argument is unresolvable. */
+function directoryAfter(cwd: string | null, words: ReadonlyArray<ShellWord>): string | null {
+  const [command, ...args] = commandWords(words);
+  if (command?.value !== "cd") return cwd;
+  const directory = args.find((word) => word.value === "-" || !word.value.startsWith("-"));
+  if (!directory) return "~";
+  if (directory.dynamic || directory.value === "-" || /[*?[]/.test(directory.value)) return null;
+  return resolveShellPath(cwd, directory.value);
+}
+
+/**
+ * Conservative list of paths a Bash command writes, removes, or renames. Relative paths resolve
+ * against `initialCwd` and each `cd` since; unresolvable ones, devices, and backups are skipped.
+ */
+export function detectShellWriteTargets(command: string, initialCwd = ""): Array<string> {
+  const targets = new Set<string>();
+  const subshells: Array<string | null> = [];
+  let cwd: string | null = initialCwd;
   let words: Array<ShellWord> = [];
-  const flush = () => {
-    targets.push(...commandWriteTargets(words));
+  let redirected: Array<ShellWord> = [];
+  let previousOp = ";";
+  const flush = (nextOp: string) => {
+    for (const word of [...redirected, ...commandWriteTargets(words)]) {
+      const path = word.dynamic ? null : resolveShellPath(cwd, word.value);
+      if (path !== null && !DEVICE_TARGET.test(path) && !BACKUP_TARGET.test(path))
+        targets.add(path);
+    }
+    // A `cd` in a pipeline, a background job, or an `||` fallback does not move what follows.
+    if (previousOp !== "|" && previousOp !== "||" && nextOp !== "|" && nextOp !== "&")
+      cwd = directoryAfter(cwd, words);
+    // A newline right after `|` or `||` continues that command line.
+    if (nextOp !== "\n" || words.length > 0) previousOp = nextOp;
     words = [];
+    redirected = [];
   };
   const tokens = tokenizeShell(command);
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i]!;
     if (token.kind === "op") {
-      flush();
+      flush(token.value);
+      if (token.value === "(") subshells.push(cwd);
+      else if (token.value === ")") {
+        const outer = subshells.pop();
+        if (outer !== undefined) cwd = outer;
+      }
     } else if (token.kind === "redir") {
       const target = tokens[i + 1];
       if (target?.kind !== "word") continue;
       i += 1;
-      const writes = token.value.includes(">") && !token.value.endsWith("&");
-      if (writes && target.value !== "/dev/null") targets.push(target);
+      if (token.value.includes(">") && !token.value.endsWith("&")) redirected.push(target);
     } else {
       words.push(token);
     }
   }
-  flush();
-  return [...new Set(targets.filter((word) => !word.dynamic).map((word) => word.value))];
+  flush(";");
+  return [...targets];
+}
+
+/** `~/.claude/` names the configured harness dir, as in the record; other `~/` paths the home dir. */
+export function expandWriteTarget(raw: string, paths: SimResolvedPaths): string {
+  return raw.trim().startsWith("~/.claude/")
+    ? expandHarnessFile(raw, paths)
+    : expandHomeString(raw, paths.homeDir);
 }
 
 interface Selection {
@@ -289,9 +392,7 @@ const make = Effect.gen(function* () {
     const records: Array<string> = [];
     const harness: Array<string> = [];
     for (const raw of unique) {
-      const expanded = raw.trim().startsWith("~/.claude/")
-        ? expandHarnessFile(raw, paths)
-        : expandHomeString(raw, paths.homeDir);
+      const expanded = expandWriteTarget(raw, paths);
       const kind = classifyHarnessPath(expanded, paths, cwd, { allowTmp });
       if (kind === null) continue;
       const absolute = NodePath.resolve(cwd ?? paths.homeDir, expanded);
@@ -405,7 +506,8 @@ const make = Effect.gen(function* () {
       yield* classifyFiles(event, item, files, paths);
     } else if (item.type === "command_execution") {
       if (!firstSighting(handledItems, `command:${item.id}`)) return;
-      yield* classifyFiles(event, item, detectShellWriteTargets(item.input), paths);
+      const cwd = yield* cwdFor(event.threadId);
+      yield* classifyFiles(event, item, detectShellWriteTargets(item.input, cwd), paths);
     }
   });
 
@@ -561,8 +663,10 @@ const make = Effect.gen(function* () {
       case "subagent.updated": {
         const subagent = event.payload;
         if (subagent.status !== "completed") return;
-        const text = [subagent.title, subagent.prompt, subagent.result].filter(Boolean).join("\n");
-        if (!REVIEW_PATTERN.test(text) || !firstSighting(handledItems, `subagent:${subagent.id}`))
+        if (
+          !isCodeReviewTask(subagent.title ?? "", subagent.prompt) ||
+          !firstSighting(handledItems, `subagent:${subagent.id}`)
+        )
           return;
         const excerpt = (subagent.result || subagent.prompt || subagent.title || "").trim();
         return yield* sim.recordTelemetry({

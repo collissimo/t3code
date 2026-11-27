@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - reads Claude Code transcripts and gate logs like sim-audit.mjs, whose timestamps are plain ISO strings.
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -11,6 +12,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerSettings from "../serverSettings.ts";
 import {
+  SIM_UNKNOWN,
   SimAuditService,
   SimService,
   SimServiceError,
@@ -21,8 +23,14 @@ import {
   type SimResolvedPaths,
   type SimState,
   type SimTelemetryEvent,
+  type SimThreadInspectionOptions,
+  type SimThreadInspectionResult,
 } from "./SimContracts.ts";
-import { detectShellWriteTargets } from "./SimObserverReactor.ts";
+import {
+  detectShellWriteTargets,
+  expandWriteTarget,
+  isCodeReviewTask,
+} from "./SimObserverReactor.ts";
 import * as SimStore from "./SimStore.ts";
 
 const isSimServiceError = Schema.is(SimServiceError);
@@ -53,11 +61,6 @@ const FOLLOWUP_CORRECTION_RE =
 // Stronger cues that indicate a recurring failure even on turn 1.
 const FIRST_TURN_FRICTION_RE =
   /\b(schon wieder|wieder kaputt|wieder falsch|hat wieder nicht|warum hast du vorhin|wieso hast du vorhin|failed again|broke again)\b/i;
-const BASH_WRITE_OP_RE =
-  /(?:(?<![<>])>{1,2}\|?|\btee\b|\bsed\b[^|\n]*(?:-i|--in-place)|\bperl\b[^|\n]*-[a-zA-Z]*i|\b(?:cp|mv|ln|install|rsync)\b|(?:writeFile|appendFile|write_text|open\s*\([^)]*['"][wax+]))/;
-const REVIEW_RE =
-  /\b(review|reviewer|re-check|recheck|audit|verify|verification|prüf\w*|gegenprüf\w*)\b/i;
-
 const MODEL_EVENT_TYPES = ["thread.model-selection-updated", "thread.provider-switched"];
 const AUDIT_EVENT_TYPES = ["checkpoint.rollback-requested", ...MODEL_EVENT_TYPES];
 
@@ -126,30 +129,6 @@ function flagMessage(turn: number, text: string): Flag | null {
   if (turn === 1 && FIRST_TURN_FRICTION_RE.test(text))
     return { turn, kind: "turn1-friction", excerpt: squashText(text) };
   return null;
-}
-
-/** Path-like tokens a shell command writes to; the caller decides which are harness files. */
-function bashWriteTargets(command: string): Array<string> {
-  const found = new Set<string>(detectShellWriteTargets(command));
-  if (!BASH_WRITE_OP_RE.test(command)) return [...found];
-  if (
-    /^\s*(?:[A-Z_]+=\S+\s+)*node\s+[^\n|;&>]*\bsim(?:-audit)?\.mjs\b/.test(command) &&
-    !/(?<![<>])>{1,2}/.test(command)
-  ) {
-    return [...found];
-  }
-  const noHeredoc = command.replace(
-    /(<<-?\s*['"]?([A-Za-z_]\w*)['"]?[^\n]*\n)[\s\S]*?(?:\n[ \t]*\2(?=\n|$)|$)/g,
-    "$1",
-  );
-  for (const match of noHeredoc.matchAll(/(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"'|;&<>()]+))/g)) {
-    const token = (match[1] ?? match[2] ?? match[3] ?? "").trim();
-    if (!token || /[$*{]/.test(token) || token.includes("/backups/") || /\.bak(?:-|$)/.test(token))
-      continue;
-    if (!/^(?:\/|~\/|\.claude\/|(?:AGENTS|CLAUDE)\.md$)/.test(token)) continue;
-    found.add(token);
-  }
-  return [...found];
 }
 
 function inferProject(cwd: string | null, dirName: string) {
@@ -258,7 +237,10 @@ function parseTranscript(
             const file = str(input.file_path);
             if (file && isHarness(file, cwd)) edits.add(file);
           } else if (block.name === "Bash") {
-            for (const file of bashWriteTargets(String(input.command ?? "")))
+            for (const file of detectShellWriteTargets(
+              String(input.command ?? ""),
+              cwd ?? undefined,
+            ))
               if (isHarness(file, cwd)) edits.add(file);
           }
         }
@@ -386,10 +368,14 @@ function readWatermark(paths: SimResolvedPaths): string | null {
 function writeWatermark(paths: SimResolvedPaths, nowMs: number, by: string): string {
   const now = new Date(nowMs).toISOString();
   NodeFS.mkdirSync(NodePath.dirname(paths.auditStatePath), { recursive: true });
-  NodeFS.writeFileSync(
-    paths.auditStatePath,
-    `${JSON.stringify({ last_audit_at: now, by }, null, 2)}\n`,
-  );
+  const temp = `${paths.auditStatePath}.${process.pid}.${NodeCrypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    NodeFS.writeFileSync(temp, `${JSON.stringify({ last_audit_at: now, by }, null, 2)}\n`);
+    NodeFS.renameSync(temp, paths.auditStatePath);
+  } catch (cause) {
+    NodeFS.rmSync(temp, { force: true });
+    throw cause;
+  }
   return now;
 }
 
@@ -425,20 +411,16 @@ function resolveWindow(options: SimAuditOptions, paths: SimResolvedPaths, nowMs:
   return { sinceMs: nowMs - DEFAULT_DAYS * 86_400_000, source: `default last ${DEFAULT_DAYS}d` };
 }
 
-/** Every session id the SIM record names as a writer, without its `cc:`/`t3:` kind. */
-function simWriters(state: SimState): Set<string> {
-  const out = new Set<string>();
-  const add = (id: string | undefined) => {
-    if (id && id !== "unknown") out.add(SimStore.bare(id));
-  };
+/** The files each session's SIM attempts name, keyed by the id without its `cc:`/`t3:` kind. */
+function filesRecordedBySession(state: SimState): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
   for (const attempt of SimStore.allAttempts(state)) {
-    add(attempt.by);
-    add(attempt.also);
-    add(attempt.sample);
-    for (const obs of attempt.observations) {
-      add(obs.by);
-      add(obs.also);
-      add(obs.sample);
+    for (const id of [attempt.by, attempt.also, attempt.sample]) {
+      if (!id || id === SIM_UNKNOWN) continue;
+      const session = SimStore.bare(id);
+      const files = out.get(session) ?? new Set<string>();
+      for (const file of attempt.files) files.add(file);
+      out.set(session, files);
     }
   }
   return out;
@@ -528,7 +510,11 @@ const chunks = <A>(items: ReadonlyArray<A>) => {
 
 const groupBy = <A extends { readonly thread_id: string }>(rows: ReadonlyArray<A>) => {
   const map = new Map<string, Array<A>>();
-  for (const row of rows) map.set(row.thread_id, [...(map.get(row.thread_id) ?? []), row]);
+  for (const row of rows) {
+    const group = map.get(row.thread_id);
+    if (group) group.push(row);
+    else map.set(row.thread_id, [row]);
+  }
   return map;
 };
 
@@ -554,11 +540,22 @@ function candidateFixedT3Threads(state: SimState): Array<string> {
   return [...ids];
 }
 
+const isForkLineage = (lineage: Data) =>
+  lineage.relationshipToParent === "fork" || lineage.sideChat === true;
+
 function forkParentFromPayload(payloadJson: string): string | null {
   const lineage = record(parseJson(payloadJson).lineage);
   const parent = str(lineage.parentThreadId);
-  if (!parent) return null;
-  return lineage.relationshipToParent === "fork" || lineage.sideChat === true ? parent : null;
+  return parent && isForkLineage(lineage) ? parent : null;
+}
+
+/** True for a thread an agent spawned, whose "user" messages are another agent's prompts. */
+function isDelegatedThread(threadId: string, lineage: Data): boolean {
+  return (
+    threadId.startsWith("thread:delegated-task:") ||
+    threadId.startsWith("thread:subagent:") ||
+    (str(lineage.parentThreadId) !== undefined && !isForkLineage(lineage))
+  );
 }
 
 const make = Effect.gen(function* () {
@@ -705,10 +702,7 @@ const make = Effect.gen(function* () {
       NodeSqliteClient.readOnly,
       Effect.mapError(ioError),
     );
-    const telemetry = (yield* sim.readTelemetry(sinceMs)).filter(
-      (event) => !caller.threadId || !("threadId" in event) || event.threadId !== caller.threadId,
-    );
-    const observed = yield* sim.getObservedModels();
+    const telemetry = yield* sim.readTelemetry(sinceMs);
     return yield* Effect.try({
       try: () =>
         buildReport({
@@ -722,7 +716,6 @@ const make = Effect.gen(function* () {
           limit,
           db,
           telemetry,
-          observed,
           advisor: settings.sim,
         }),
       catch: ioError,
@@ -731,8 +724,14 @@ const make = Effect.gen(function* () {
 
   const inspectThread: SimAuditService["Service"]["inspectThread"] = Effect.fn(
     "SimAuditService.inspectThread",
-  )(function* (_caller, threadIdPrefix) {
+  )(function* (_caller, threadIdPrefix, options: SimThreadInspectionOptions = {}) {
     yield* requireSimEnabled;
+    const { from = 1, limit = INSPECT_LINES } = options;
+    const invalid = Object.entries({ from, limit })
+      .filter(([, value]) => !Number.isInteger(value) || value < 1)
+      .map(([name, value]) => `invalid ${name} value: ${value} (a whole number from 1)`);
+    if (invalid.length)
+      return yield* new SimServiceError({ code: "validation", problems: invalid });
     const wanted = threadIdPrefix.trim();
     if (!wanted)
       return yield* new SimServiceError({
@@ -795,7 +794,10 @@ const make = Effect.gen(function* () {
     }
     return {
       threadId: found.thread.thread_id,
-      text: renderInspection(found.thread, found.runs, found.messages, found.items, found.events),
+      ...renderInspection(found.thread, found.runs, found.messages, found.items, found.events, {
+        from,
+        limit,
+      }),
     };
   });
 
@@ -841,7 +843,6 @@ interface ReportInput {
     readonly forkParents: ReadonlyMap<string, string | null>;
   };
   readonly telemetry: ReadonlyArray<SimTelemetryEvent>;
-  readonly observed: ReadonlySet<string>;
   readonly advisor: Parameters<typeof SimStore.buildAdvisorEscalation>[1];
 }
 
@@ -867,8 +868,9 @@ function buildReport(input: ReportInput): SimAuditReport {
   const { caller, paths, state, sinceMs, limit, db } = input;
   const allowTmp = SimStore.isTestSimDir(paths);
   const kindOf = (file: string, cwd: string | null) =>
-    classifyHarnessPath(file, paths, cwd ?? paths.homeDir, { allowTmp });
-  const writers = simWriters(state);
+    classifyHarnessPath(expandWriteTarget(file, paths), paths, cwd ?? paths.homeDir, { allowTmp });
+  const recordedFiles = filesRecordedBySession(state);
+  const observed = SimStore.observedModels(state);
   const projects = new Map(db.projects.map((row) => [row.project_id, row]));
   const runsBy = groupBy(db.runs);
   const messagesBy = groupBy(db.messages);
@@ -894,20 +896,41 @@ function buildReport(input: ReportInput): SimAuditReport {
   const interrupts = new Map<string, Interrupt>();
   const reviews = new Map<string, Review>();
   const freshModels = new Map<string, { providerInstanceId: string; model: string }>();
+  const ownThreads = new Set<string>(caller.threadId ? [caller.threadId] : []);
   let threadsScanned = 0;
   let excludedSelf = 0;
 
+  /** One entry for the files the session's SIM attempts name, one for those they do not. */
+  const addHarnessEdits = (
+    edit: Omit<HarnessEdit, "files" | "record" | "recorded">,
+    files: ReadonlyArray<string>,
+    sessionIds: ReadonlyArray<string>,
+  ) => {
+    for (const recorded of [false, true]) {
+      const group = files.filter(
+        (file) => sessionIds.some((id) => recordedFiles.get(id)?.has(file)) === recorded,
+      );
+      if (group.length) edits.push({ ...edit, files: group, record: false, recorded });
+    }
+  };
+
   const noteModel = (providerInstanceId: string, model: string) => {
-    if (!model || model === "unknown" || input.observed.has(model)) return;
+    if (!model || model === "unknown" || observed.has(model)) return;
     freshModels.set(`${providerInstanceId}::${model}`, { providerInstanceId, model });
   };
 
   for (const thread of db.threads) {
-    if (caller.threadId && thread.thread_id === caller.threadId) {
+    const payload = parseJson(thread.payload_json);
+    const lineage = record(payload.lineage);
+    // The caller and the threads it spawned are the audit itself.
+    if (
+      caller.threadId &&
+      (thread.thread_id === caller.threadId || lineage.parentThreadId === caller.threadId)
+    ) {
+      ownThreads.add(thread.thread_id);
       excludedSelf += 1;
       continue;
     }
-    const payload = parseJson(thread.payload_json);
     const messages = messagesBy.get(thread.thread_id) ?? [];
     const users = messages
       .filter((row) => row.role === "user")
@@ -926,10 +949,15 @@ function buildReport(input: ReportInput): SimAuditReport {
     const project = projects.get(thread.project_id);
     const cwd = str(payload.worktreePath) ?? project?.workspace_root ?? null;
     const date = thread.updated_at.slice(0, 10);
+    const delegated = isDelegatedThread(thread.thread_id, lineage);
 
-    const flags = users.flatMap((entry, index) =>
-      Date.parse(entry.row.created_at) >= sinceMs ? (flagMessage(index + 1, entry.text) ?? []) : [],
-    );
+    const flags = delegated
+      ? []
+      : users.flatMap((entry, index) =>
+          Date.parse(entry.row.created_at) >= sinceMs
+            ? (flagMessage(index + 1, entry.text) ?? [])
+            : [],
+        );
     if (flags.length) {
       flagged.push({
         source: "t3",
@@ -1001,7 +1029,7 @@ function buildReport(input: ReportInput): SimAuditReport {
       const targets =
         item.type === "file_change"
           ? [str(itemPayload.fileName), ...changePaths].filter((file): file is string => !!file)
-          : bashWriteTargets(String(itemPayload.input ?? ""));
+          : detectShellWriteTargets(String(itemPayload.input ?? ""), cwd ?? undefined);
       for (const file of targets) {
         const kind = kindOf(file, cwd);
         const canonical = SimStore.resolveCallerFile(
@@ -1013,22 +1041,11 @@ function buildReport(input: ReportInput): SimAuditReport {
         else if (kind === "record") recordFiles.add(canonical);
       }
     }
-    const nativeIds = claudeNativeIdsByThread.get(thread.thread_id);
-    const recorded =
-      writers.has(thread.thread_id) ||
-      (nativeIds !== undefined && [...nativeIds].some((id) => writers.has(id)));
-    if (harnessFiles.size) {
-      edits.push({
-        source: "t3",
-        session: thread.thread_id,
-        date,
-        provider,
-        model,
-        files: [...harnessFiles],
-        record: false,
-        recorded,
-      });
-    }
+    addHarnessEdits(
+      { source: "t3", session: thread.thread_id, date, provider, model },
+      [...harnessFiles],
+      [thread.thread_id, ...(claudeNativeIdsByThread.get(thread.thread_id) ?? [])],
+    );
     if (recordFiles.size) {
       edits.push({
         source: "t3",
@@ -1042,10 +1059,7 @@ function buildReport(input: ReportInput): SimAuditReport {
       });
     }
 
-    const lineage = record(payload.lineage);
-    const delegated =
-      !!str(lineage.parentThreadId) || thread.thread_id.startsWith("thread:delegated-task:");
-    if (delegated && (REVIEW_RE.test(thread.title) || REVIEW_RE.test(users[0]?.text ?? ""))) {
+    if (delegated && isCodeReviewTask(thread.title, users[0]?.text)) {
       const lastAssistant = [...messages].reverse().find((row) => row.role === "assistant");
       reviews.set(thread.thread_id, {
         threadId: thread.thread_id,
@@ -1056,16 +1070,21 @@ function buildReport(input: ReportInput): SimAuditReport {
     }
   }
 
-  for (const event of input.telemetry) {
+  const telemetry = input.telemetry.filter(
+    (event) => !("threadId" in event && event.threadId && ownThreads.has(event.threadId)),
+  );
+  for (const event of telemetry) {
     switch (event.kind) {
       case "unrecorded_harness_edit":
       case "direct_sim_record_edit": {
         const isRecord = event.kind === "direct_sim_record_edit";
-        const known = edits.some(
-          (edit) =>
-            edit.session === event.threadId &&
-            edit.record === isRecord &&
-            event.files.every((file) => edit.files.includes(file)),
+        const known = event.files.every((file) =>
+          edits.some(
+            (edit) =>
+              edit.session === event.threadId &&
+              edit.record === isRecord &&
+              edit.files.includes(file),
+          ),
         );
         if (!known) {
           edits.push({
@@ -1140,20 +1159,20 @@ function buildReport(input: ReportInput): SimAuditReport {
     claudeSessionsScanned = scan.transcripts.length;
     for (const transcript of scan.transcripts) {
       const date = (transcript.lastTs ?? new Date(sinceMs).toISOString()).slice(0, 10);
-      if (transcript.harnessEdits.length) {
-        edits.push({
+      const files = transcript.harnessEdits.map((file) =>
+        SimStore.resolveCallerFile(file, { sessionId: "" }, paths),
+      );
+      addHarnessEdits(
+        {
           source: "claude",
           session: transcript.sessionId,
           date,
           provider: "claudeAgent",
           model: transcript.model,
-          files: transcript.harnessEdits.map((file) =>
-            SimStore.resolveCallerFile(file, { sessionId: "" }, paths),
-          ),
-          record: false,
-          recorded: writers.has(transcript.sessionId),
-        });
-      }
+        },
+        [...new Set(files)],
+        [transcript.sessionId],
+      );
       if (transcript.flags.length) {
         flagged.push({
           source: "claude",
@@ -1171,7 +1190,10 @@ function buildReport(input: ReportInput): SimAuditReport {
   }
 
   // Detect standing fixed observations recorded by a fork/side-chat via CLI sim.mjs (which lacks lineage awareness).
+  const forkRoots = new Map<string, string>();
   const forkRootOf = (threadId: string): string => {
+    const known = forkRoots.get(threadId);
+    if (known !== undefined) return known;
     let current = threadId;
     const visited = new Set<string>([current]);
     for (let hop = 0; hop < MAX_FORK_HOPS; hop += 1) {
@@ -1180,6 +1202,7 @@ function buildReport(input: ReportInput): SimAuditReport {
       visited.add(parent);
       current = parent;
     }
+    forkRoots.set(threadId, current);
     return current;
   };
   const forkSelfGrades: Array<{
@@ -1225,7 +1248,7 @@ function buildReport(input: ReportInput): SimAuditReport {
     SimStore.findAttempt(state, attemptId)?.problem.id ?? "?";
   const newModels = [...freshModels.values()];
   const escalationTelemetry: Array<SimTelemetryEvent> = [
-    ...input.telemetry,
+    ...telemetry,
     ...newModels.map((item) => ({
       ts: new Date(sinceMs).toISOString(),
       kind: "new_model_observed" as const,
@@ -1399,7 +1422,8 @@ function renderInspection(
   messages: ReadonlyArray<MessageRow>,
   items: ReadonlyArray<TurnItemRow>,
   events: ReadonlyArray<EventRow>,
-): string {
+  page: { readonly from: number; readonly limit: number },
+): Omit<SimThreadInspectionResult, "threadId"> {
   const runs = runRows.map(runInfo);
   const entries: Array<{ at: string; order: number; line: string }> = [];
   let userTurn = 0;
@@ -1449,10 +1473,18 @@ function renderInspection(
     [...new Set(runs.map((run) => `${run.provider}/${run.model}`))].join(", ") ||
     thread.default_provider;
   const header = `Thread ${thread.thread_id} | ${thread.title} | models: ${models} | runs: ${runs.length} | user turns: ${userTurn}${runs.some((run) => run.status === "interrupted") ? " | has interrupted runs" : ""}`;
-  const shown = lines.slice(0, INSPECT_LINES);
-  return [
-    header,
-    ...shown,
-    ...(lines.length > shown.length ? [`... (${lines.length - shown.length} more lines)`] : []),
-  ].join("\n");
+  const shown = lines.slice(page.from - 1, page.from - 1 + page.limit);
+  const end = page.from - 1 + shown.length;
+  const nextFrom = end < lines.length ? end + 1 : null;
+  return {
+    text: [
+      shown.length ? `${header} | lines ${page.from}-${end} of ${lines.length}` : header,
+      ...shown,
+      ...(nextFrom === null
+        ? []
+        : [`... (${lines.length - end} more lines; read on with inspect_thread from=${nextFrom})`]),
+    ].join("\n"),
+    totalLines: lines.length,
+    nextFrom,
+  };
 }

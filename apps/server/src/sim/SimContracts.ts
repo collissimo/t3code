@@ -669,9 +669,18 @@ export interface SimAuditReport {
   readonly advisorEscalation?: SimAdvisorEscalation | undefined;
 }
 
+/** Which lines of a thread's transcript to return, counted from 1 below the header. */
+export interface SimThreadInspectionOptions {
+  readonly from?: number | undefined;
+  readonly limit?: number | undefined;
+}
+
 export interface SimThreadInspectionResult {
   readonly threadId: string;
   readonly text: string;
+  readonly totalLines: number;
+  /** The `from` that reads on, or null at the end of the transcript. */
+  readonly nextFrom: number | null;
 }
 
 export interface SimStateSnapshot {
@@ -736,6 +745,7 @@ export class SimAuditService extends Context.Service<
     readonly inspectThread: (
       caller: SimCallerContext,
       threadIdPrefix: string,
+      options?: SimThreadInspectionOptions,
     ) => Effect.Effect<SimThreadInspectionResult, SimServiceError>;
     readonly markAuditDone: (
       caller: SimCallerContext,
