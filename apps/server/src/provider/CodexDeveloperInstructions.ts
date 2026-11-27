@@ -5,8 +5,8 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
-  T3_CODE_ORCHESTRATION_SECTIONS,
   T3_CODE_SCRIPT_TOOL_INSTRUCTIONS,
+  t3CodeOrchestrationSections,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 
 /** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
@@ -16,6 +16,7 @@ export interface T3CodeToolAvailability {
   readonly browser: boolean;
   readonly device: boolean;
   readonly script?: boolean;
+  readonly nativeSubagents?: boolean;
 }
 
 const normalizeAvailability = (
@@ -24,16 +25,14 @@ const normalizeAvailability = (
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
 /** Instructions for unavailable tools would steer the model away from its remaining automation. */
-const toolInstructions = (availability: boolean | T3CodeToolAvailability): string => {
-  const tools = normalizeAvailability(availability);
-  return [
+const toolInstructions = (tools: T3CodeToolAvailability): string =>
+  [
     tools.browser ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "",
     tools.device ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS : "",
     tools.script === true ? T3_CODE_SCRIPT_TOOL_INSTRUCTIONS : "",
   ]
     .filter(Boolean)
     .join("\n\n");
-};
 
 export interface CodexRuntimeInfo {
   readonly agentFeedback?: AgentFeedbackMode;
@@ -49,15 +48,18 @@ export function buildCodexAdditionalContext(
   /** The thread's role sections, such as orchestrator mode; each within the per-entry cap. */
   threadInstructions: ReadonlyArray<string> = [],
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
-  const tools = toolInstructions(toolsAvailable);
+  const availability = normalizeAvailability(toolsAvailable);
+  const tools = toolInstructions(availability);
   // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...Object.fromEntries(
       // Thread sections sort after the orchestration sections they refine.
-      [...T3_CODE_ORCHESTRATION_SECTIONS, ...threadInstructions].map((section, index) => [
-        `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
-        { kind: "application" as const, value: section },
-      ]),
+      [...t3CodeOrchestrationSections(availability.nativeSubagents), ...threadInstructions].map(
+        (section, index) => [
+          `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
+          { kind: "application" as const, value: section },
+        ],
+      ),
     ),
     t3_code_runtime: {
       kind: "application",
