@@ -13070,5 +13070,13 @@
     " more in Linked items"
   ],
   "1350741e3ff104f6": "Turn off orchestrator mode",
-  "9991b89622516f52": "Orchestrator mode"
+  "9991b89622516f52": "Orchestrator mode",
+  "e811a3d455329ebc": "Today",
+  "93d391fe57eeb8aa": "{provider} today",
+  "aa964ba93eb0f4bc": "{days} days",
+  "bf5dfcc0ae724c1f": "{provider}, last {days} days",
+  "11a5a798041da0a8": "{tokens} tokens",
+  "a54573109f6923ff": "{period}: {tokens} tokens · {cost}",
+  "01bb10bdc8aeb67d": "{period}: {tokens} tokens",
+  "dadf807b7345a19d": "{provider} reports no limits; this counts its local history."
 }

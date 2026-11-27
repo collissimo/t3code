@@ -13062,5 +13062,13 @@
     " de plus dans Éléments associés"
   ],
   "1350741e3ff104f6": "Désactiver le mode orchestrateur",
-  "9991b89622516f52": "Mode orchestrateur"
+  "9991b89622516f52": "Mode orchestrateur",
+  "e811a3d455329ebc": "Aujourd’hui",
+  "93d391fe57eeb8aa": "{provider} aujourd’hui",
+  "aa964ba93eb0f4bc": "{days} jours",
+  "bf5dfcc0ae724c1f": "{provider}, {days} derniers jours",
+  "11a5a798041da0a8": "{tokens} tokens",
+  "a54573109f6923ff": "{period} : {tokens} tokens · {cost}",
+  "01bb10bdc8aeb67d": "{period} : {tokens} tokens",
+  "dadf807b7345a19d": "{provider} ne signale aucune limite ; ceci compte son historique local."
 }

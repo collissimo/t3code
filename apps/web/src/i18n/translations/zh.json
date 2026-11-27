@@ -13076,5 +13076,13 @@
     " 项"
   ],
   "1350741e3ff104f6": "关闭编排模式",
-  "9991b89622516f52": "编排模式"
+  "9991b89622516f52": "编排模式",
+  "e811a3d455329ebc": "今天",
+  "93d391fe57eeb8aa": "{provider} 今天",
+  "aa964ba93eb0f4bc": "{days} 天",
+  "bf5dfcc0ae724c1f": "{provider}，最近 {days} 天",
+  "11a5a798041da0a8": "{tokens} 个 token",
+  "a54573109f6923ff": "{period}：{tokens} 个 token · {cost}",
+  "01bb10bdc8aeb67d": "{period}：{tokens} 个 token",
+  "dadf807b7345a19d": "{provider} 不报告限额；这里统计的是本地历史。"
 }

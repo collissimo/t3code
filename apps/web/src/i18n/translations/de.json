@@ -13062,5 +13062,13 @@
     " weitere unter Verknüpfte Elemente"
   ],
   "1350741e3ff104f6": "Orchestrator-Modus ausschalten",
-  "9991b89622516f52": "Orchestrator-Modus"
+  "9991b89622516f52": "Orchestrator-Modus",
+  "e811a3d455329ebc": "Heute",
+  "93d391fe57eeb8aa": "{provider} heute",
+  "aa964ba93eb0f4bc": "{days} Tage",
+  "bf5dfcc0ae724c1f": "{provider}, letzte {days} Tage",
+  "11a5a798041da0a8": "{tokens} Tokens",
+  "a54573109f6923ff": "{period}: {tokens} Tokens · {cost}",
+  "01bb10bdc8aeb67d": "{period}: {tokens} Tokens",
+  "dadf807b7345a19d": "{provider} meldet keine Limits; gezählt wird der lokale Verlauf."
 }
