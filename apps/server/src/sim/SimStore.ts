@@ -9,9 +9,11 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  DAY_MS,
   FORK_FAMILY_REASON,
   SIM_DEFAULT_PAGE_CHARS,
   SIM_DEPENDS,
+  SIM_FAILURE_RESULTS,
   SIM_FORMAT,
   SIM_FULL_BUDGET,
   SIM_GENESIS,
@@ -27,11 +29,13 @@ import {
   SimServiceError,
   bare,
   canonicalHarnessFile,
+  clipText,
   effectiveHarness,
   expandHarnessFile,
   expandHomeString,
   isPathWithinRoot,
   ownReport,
+  pluralize as count,
   settlesFix,
   sharesFamily,
   standing,
@@ -59,14 +63,17 @@ import {
   type SimWriteRequest,
   type SimWriteResult,
 } from "./SimContracts.ts";
-import { buildSimStats, renderSimStats, searchProblemsRanked } from "./SimStats.ts";
-
-export { bare };
+import {
+  VALID_STATUS_FILTERS,
+  buildSimStats,
+  invalidSearchStatuses,
+  renderSimStats,
+  searchProblemsRanked,
+} from "./SimStats.ts";
 
 type Data = Record<string, unknown>;
 
 const NEEDS_PREDICTED = ["fixed", "missed"];
-const FAILURE_RESULTS = ["missed", "regressed", "misfired"];
 const AMENDABLE = {
   problem: ["name"],
   always: ["what", "why", "anchor", "files", "depends_on"],
@@ -106,7 +113,6 @@ const isText = (value: unknown, min = 1): value is string =>
 const isList = (value: unknown): value is Array<string> =>
   Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim().length > 0);
 const idNumber = (id: string) => Number(String(id).slice(1));
-const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const estimateTokens = (text: string) => Math.ceil(text.length / 3.5);
 const asData = (value: unknown): Data =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Data) : {};
@@ -1357,7 +1363,7 @@ function strangers(journal: SimJournal, paths: SimResolvedPaths) {
     .flatMap((root) => NodeFS.readdirSync(root).map((name) => NodePath.join(root, name)));
   const found = new Map<string, Array<number>>();
   if (!folders.length) return found;
-  const since = new Date(Date.now() - SEEN_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const since = new Date(Date.now() - SEEN_DAYS * DAY_MS).toISOString().slice(0, 10);
   const known = new Map<string, boolean>();
   for (const event of journal.events) {
     if (typeof event.day !== "string" || event.day < since || typeof event.by !== "string")
@@ -1743,18 +1749,15 @@ function renderProblemWith(state: SimState, problem: SimProblem, withHarness: bo
 const renderProblem = (state: SimState, problem: SimProblem) =>
   renderProblemWith(state, problem, true);
 
-const clip = (text: string, size: number) =>
-  text.length <= size ? text : `${text.slice(0, size - 1).trimEnd()}…`;
-
 function renderBrief(state: SimState, problem: SimProblem) {
   const lines = [problemHead(state, problem)];
   for (const attempt of problem.attempts) {
     const sum = tally([attempt]);
     const harness = attempt.harness ? ` [${attempt.harness}]` : "";
     const parts = [
-      `${attempt.id} ${attempt.round} ${attempt.action}${harness}, ${attemptState(attempt)}: ${clip(attempt.what, 160)}`,
+      `${attempt.id} ${attempt.round} ${attempt.action}${harness}, ${attemptState(attempt)}: ${clipText(attempt.what, 160)}`,
     ];
-    if (attempt.rejected_because) parts.push(`because: ${clip(attempt.rejected_because, 160)}`);
+    if (attempt.rejected_because) parts.push(`because: ${clipText(attempt.rejected_because, 160)}`);
     if (attempt.accepted && !attempt.retracted) parts.push(tallyText(sum));
     lines.push(`  ${parts.join(" | ")}`);
   }
@@ -1987,7 +1990,7 @@ function saveSeen(paths: SimResolvedPaths, session: string, log: SeenLog) {
   // Logs live SEEN_DAYS, so one prune per interval per dir keeps the dir just as small.
   if (now - (lastSeenPrune.get(paths.seenDir) ?? -Infinity) < SEEN_PRUNE_INTERVAL_MS) return;
   lastSeenPrune.set(paths.seenDir, now);
-  const limit = now - SEEN_DAYS * 86_400_000;
+  const limit = now - SEEN_DAYS * DAY_MS;
   for (const name of NodeFS.readdirSync(paths.seenDir)) {
     try {
       if (NodeFS.statSync(NodePath.join(paths.seenDir, name)).mtimeMs < limit) {
@@ -2024,7 +2027,7 @@ function pruneAndWriteEpochs(
   // Seen logs expire after SEEN_DAYS; an epoch older than twice that guards nothing.
   for (const [id, entry] of Object.entries(epochs)) {
     const refTime = entry.updatedAt ?? entry.resetAt;
-    if (refTime > 0 && now - refTime > 2 * SEEN_DAYS * 86_400_000) delete epochs[id];
+    if (refTime > 0 && now - refTime > 2 * SEEN_DAYS * DAY_MS) delete epochs[id];
   }
   NodeFS.mkdirSync(paths.simDir, { recursive: true });
   writeWhole(paths.epochsPath, `${JSON.stringify(epochs)}\n`);
@@ -2373,7 +2376,7 @@ export function renderReview(
         (obs) => obs.policy === policy && (!harness || effectiveHarness(obs) === harness),
       );
       if (here.some((obs) => obs.result === "kept")) continue;
-      const failed = here.filter((obs) => FAILURE_RESULTS.includes(obs.result));
+      const failed = here.filter((obs) => SIM_FAILURE_RESULTS.has(obs.result));
       const confirmed = here.filter((obs) => settlesFix(attempt, obs));
       if (!failed.length && confirmed.length) continue;
       const seen = here.length
@@ -2431,17 +2434,17 @@ export function buildAdvisorEscalation(
   for (const problem of state.problems) {
     const liveAttempts = problem.attempts.filter((attempt) => attempt.live);
     const hasFailingLive = liveAttempts.some((attempt) =>
-      standing(attempt).some((obs) => FAILURE_RESULTS.includes(obs.result)),
+      standing(attempt).some((obs) => SIM_FAILURE_RESULTS.has(obs.result)),
     );
     const failedAttempts = problem.attempts.filter(
       (attempt) =>
-        !attempt.retracted && standing(attempt).some((obs) => FAILURE_RESULTS.includes(obs.result)),
+        !attempt.retracted && standing(attempt).some((obs) => SIM_FAILURE_RESULTS.has(obs.result)),
     );
     if (failedAttempts.length >= 2 && hasFailingLive) {
       candidates.push({
         kind: "recurring_failures",
         id: problem.id,
-        summary: `${problem.id} has ${failedAttempts.length} attempts that failed (${failedAttempts.map((a) => a.id).join(", ")}): ${clip(problem.name, 120)}`,
+        summary: `${problem.id} has ${failedAttempts.length} attempts that failed (${failedAttempts.map((a) => a.id).join(", ")}): ${clipText(problem.name, 120)}`,
       });
     }
     const conflicting = liveAttempts.filter((attempt) => {
@@ -2449,7 +2452,7 @@ export function buildAdvisorEscalation(
       const setting = (obs: SimObservation) => `${obs.policy}::${effectiveHarness(obs) ?? ""}`;
       const fixedIn = new Set(outcomes.filter((obs) => obs.result === "fixed").map(setting));
       const failedIn = new Set(
-        outcomes.filter((obs) => FAILURE_RESULTS.includes(obs.result)).map(setting),
+        outcomes.filter((obs) => SIM_FAILURE_RESULTS.has(obs.result)).map(setting),
       );
       return [...fixedIn].some((where) => [...failedIn].some((other) => other !== where));
     });
@@ -2579,14 +2582,22 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
     case "find": {
       if (!isText(request.query))
         throw invalid('give the words to search for: action "find" with query');
+      const badStatuses = invalidSearchStatuses(request.query);
+      if (badStatuses.length)
+        throw invalid(
+          `unknown status filter ${badStatuses.map((value) => `"status:${value}"`).join(", ")}; use one of: ${VALID_STATUS_FILTERS.join(", ")}`,
+        );
       const hits = searchProblemsRanked(state, request.query);
       if (!hits.length) return { text: `no entry contains: ${request.query}` };
+      const listing = paged({
+        command: `SIM find ${request.query}`,
+        page: request.page,
+        units: hits.map((hit) => indexLine(hit.problem)),
+      });
       return {
-        text: paged({
-          command: `SIM find ${request.query}`,
-          page: request.page,
-          units: hits.map((hit) => indexLine(hit.problem)),
-        }),
+        text: hits[0]?.partial
+          ? `No entry contains every word; these match some of them.\n\n${listing}`
+          : listing,
       };
     }
     case "stats": {
@@ -3255,7 +3266,7 @@ function diffPreview(before: string, after: string): string {
     endA -= 1;
     endB -= 1;
   }
-  return clip(
+  return clipText(
     [
       `@@ line ${start + 1} @@`,
       ...a.slice(start, endA).map((line) => `-${line}`),

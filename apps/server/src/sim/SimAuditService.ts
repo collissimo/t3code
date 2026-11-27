@@ -9,13 +9,17 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { delegatedTaskPrefix } from "../mcp/threadAccess.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
+  DAY_MS,
   SIM_UNKNOWN,
   SimAuditService,
   SimService,
   SimServiceError,
+  bare,
   classifyHarnessPath,
+  clipText,
   type SimAuditOptions,
   type SimAuditReport,
   type SimCallerContext,
@@ -39,6 +43,7 @@ const DEFAULT_LIMIT = 25;
 const THREAD_LIMIT = 2_000;
 const CHUNK = 400;
 const INSPECT_LINES = 200;
+const MAX_INSPECT_LINES = 500;
 const MAX_FORK_HOPS = 16;
 const AUDIT_MARKER = "[SIM-AUDIT]";
 
@@ -86,7 +91,7 @@ function squashText(text: unknown, max = 240) {
   const flat = String(text ?? "")
     .replace(/\s+/g, " ")
     .trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  return clipText(flat, max);
 }
 
 /** The user's own words: mechanical wrappers stripped, as sim-audit.mjs does. */
@@ -170,7 +175,7 @@ interface ClaudeTranscript {
   readonly lastTs: string | null;
   readonly userTurns: number;
   readonly isAuditSelf: boolean;
-  readonly harnessEdits: ReadonlyArray<string>;
+  readonly harnessEdits: ReadonlyMap<string, string | null>;
   readonly flags: ReadonlyArray<Flag>;
 }
 
@@ -201,7 +206,13 @@ function parseTranscript(
     return null;
   }
   const users: Array<{ turn: number; ts: string | null; text: string }> = [];
-  const edits = new Set<string>();
+  const edits = new Map<string, string | null>();
+  const noteEdit = (file: string, ts: string | undefined) => {
+    const prev = edits.get(file);
+    if (prev === undefined || (ts !== undefined && (prev === null || ts > prev))) {
+      edits.set(file, ts ?? null);
+    }
+  };
   const models = new Map<string, number>();
   let cwd: string | null = null;
   let lastTs: string | null = null;
@@ -234,13 +245,13 @@ function parseTranscript(
           const input = record(block.input);
           if (["Write", "Edit", "MultiEdit"].includes(String(block.name))) {
             const file = str(input.file_path);
-            if (file && isHarness(file, cwd)) edits.add(file);
+            if (file && isHarness(file, cwd)) noteEdit(file, ts);
           } else if (block.name === "Bash") {
             for (const file of detectShellWriteTargets(
               String(input.command ?? ""),
               cwd ?? undefined,
             ))
-              if (isHarness(file, cwd)) edits.add(file);
+              if (isHarness(file, cwd)) noteEdit(file, ts);
           }
         }
       }
@@ -264,7 +275,7 @@ function parseTranscript(
     lastTs,
     userTurns: users.length,
     isAuditSelf,
-    harnessEdits: [...edits],
+    harnessEdits: edits,
     flags,
   };
 }
@@ -399,22 +410,35 @@ function resolveWindow(options: SimAuditOptions, paths: SimResolvedPaths, nowMs:
         problems: [`invalid days value: ${options.days}`],
       });
     }
-    return { sinceMs: nowMs - options.days * 86_400_000, source: `last ${options.days}d` };
+    return { sinceMs: nowMs - options.days * DAY_MS, source: `last ${options.days}d` };
   }
   const watermark = readWatermark(paths);
   if (watermark) return { sinceMs: Date.parse(watermark), source: `watermark (${watermark})` };
-  return { sinceMs: nowMs - DEFAULT_DAYS * 86_400_000, source: `default last ${DEFAULT_DAYS}d` };
+  return { sinceMs: nowMs - DEFAULT_DAYS * DAY_MS, source: `default last ${DEFAULT_DAYS}d` };
 }
 
-/** The files each session's SIM attempts name, keyed by the id without its `cc:`/`t3:` kind. */
-function filesRecordedBySession(state: SimState): Map<string, Set<string>> {
-  const out = new Map<string, Set<string>>();
+function localIsoDay(ts: string | null | undefined, fallbackDay: string): string {
+  if (!ts) return fallbackDay;
+  const ms = Date.parse(ts);
+  if (!Number.isFinite(ms)) return fallbackDay;
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Latest SIM attempt day per file for each session, keyed by the id without its `cc:`/`t3:` kind. */
+function filesRecordedBySession(state: SimState): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
   for (const attempt of SimStore.allAttempts(state)) {
+    if (attempt.retracted) continue;
+    const day = attempt.recorded?.day ?? attempt.round;
     for (const id of [attempt.by, attempt.also, attempt.sample]) {
       if (!id || id === SIM_UNKNOWN) continue;
-      const session = SimStore.bare(id);
-      const files = out.get(session) ?? new Set<string>();
-      for (const file of attempt.files) files.add(file);
+      const session = bare(id);
+      const files = out.get(session) ?? new Map<string, string>();
+      for (const file of attempt.files) {
+        const prev = files.get(file);
+        if (prev === undefined || day > prev) files.set(file, day);
+      }
       out.set(session, files);
     }
   }
@@ -545,11 +569,15 @@ function forkParentFromPayload(payloadJson: string): string | null {
 }
 
 /** True for a thread an agent spawned, whose "user" messages are another agent's prompts. */
-function isDelegatedThread(threadId: string, lineage: Data): boolean {
+function isDelegatedThread(threadId: string, payload: Data, lineage: Data): boolean {
+  // Forks and side chats are a person's threads even when they hang off a spawned one.
+  if (isForkLineage(lineage)) return false;
   return (
-    threadId.startsWith("thread:delegated-task:") ||
+    threadId.startsWith(delegatedTaskPrefix) ||
     threadId.startsWith("thread:subagent:") ||
-    (str(lineage.parentThreadId) !== undefined && !isForkLineage(lineage))
+    str(lineage.parentThreadId) !== undefined ||
+    lineage.workflowStep === true ||
+    payload.delegatedFrom != null
   );
 }
 
@@ -791,7 +819,7 @@ const make = Effect.gen(function* () {
       threadId: found.thread.thread_id,
       ...renderInspection(found.thread, found.runs, found.messages, found.items, found.events, {
         from,
-        limit,
+        limit: Math.min(limit, MAX_INSPECT_LINES),
       }),
     };
   });
@@ -892,19 +920,28 @@ function buildReport(input: ReportInput): SimAuditReport {
   const reviews = new Map<string, Review>();
   const freshModels = new Map<string, { providerInstanceId: string; model: string }>();
   const ownThreads = new Set<string>(caller.threadId ? [caller.threadId] : []);
+  const ownChildren = new Set<string>();
   let threadsScanned = 0;
   let excludedSelf = 0;
 
-  /** One entry for the files the session's SIM attempts name, one for those they do not. */
+  /** One entry for the files the session's SIM attempts name on or after the edit day, one for those they do not. */
   const addHarnessEdits = (
     edit: Omit<HarnessEdit, "files" | "record" | "recorded">,
-    files: ReadonlyArray<string>,
+    files: ReadonlyMap<string, string | null>,
     sessionIds: ReadonlyArray<string>,
   ) => {
+    const entries = [...files.entries()];
     for (const recorded of [false, true]) {
-      const group = files.filter(
-        (file) => sessionIds.some((id) => recordedFiles.get(id)?.has(file)) === recorded,
-      );
+      const group = entries
+        .filter(([file, editTs]) => {
+          const editDay = localIsoDay(editTs, edit.date);
+          const hasRecord = sessionIds.some((id) => {
+            const recordedDay = recordedFiles.get(id)?.get(file);
+            return recordedDay !== undefined && recordedDay >= editDay;
+          });
+          return hasRecord === recorded;
+        })
+        .map(([file]) => file);
       if (group.length) edits.push({ ...edit, files: group, record: false, recorded });
     }
   };
@@ -917,11 +954,9 @@ function buildReport(input: ReportInput): SimAuditReport {
   for (const thread of db.threads) {
     const payload = parseJson(thread.payload_json);
     const lineage = record(payload.lineage);
-    // The caller and the threads it spawned are the audit itself.
-    if (
-      caller.threadId &&
-      (thread.thread_id === caller.threadId || lineage.parentThreadId === caller.threadId)
-    ) {
+    const isOwnChild = Boolean(caller.threadId && lineage.parentThreadId === caller.threadId);
+    // The caller is the audit itself; skip it completely.
+    if (caller.threadId && thread.thread_id === caller.threadId) {
       ownThreads.add(thread.thread_id);
       excludedSelf += 1;
       continue;
@@ -931,11 +966,13 @@ function buildReport(input: ReportInput): SimAuditReport {
       .filter((row) => row.role === "user")
       .map((row) => ({ row, text: extractUserText(parseJson(row.payload_json).text) }))
       .filter((entry) => entry.text);
-    if (thread.title.includes(AUDIT_MARKER) || users[0]?.text.includes(AUDIT_MARKER)) {
+    if (
+      !isOwnChild &&
+      (thread.title.includes(AUDIT_MARKER) || users[0]?.text.includes(AUDIT_MARKER))
+    ) {
       excludedSelf += 1;
       continue;
     }
-    threadsScanned += 1;
     const runs = (runsBy.get(thread.thread_id) ?? []).map(runInfo);
     const lastRun = runs[runs.length - 1];
     const provider =
@@ -944,7 +981,62 @@ function buildReport(input: ReportInput): SimAuditReport {
     const project = projects.get(thread.project_id);
     const cwd = str(payload.worktreePath) ?? project?.workspace_root ?? null;
     const date = thread.updated_at.slice(0, 10);
-    const delegated = isDelegatedThread(thread.thread_id, lineage);
+
+    const harnessFiles = new Map<string, string | null>();
+    const recordFiles = new Set<string>();
+    for (const item of itemsBy.get(thread.thread_id) ?? []) {
+      const itemPayload = parseJson(item.payload_json);
+      const changePaths = Array.isArray(itemPayload.changes)
+        ? itemPayload.changes.map((entry) => str(record(entry).path))
+        : [];
+      const targets =
+        item.type === "file_change"
+          ? [str(itemPayload.fileName), ...changePaths].filter((file): file is string => !!file)
+          : detectShellWriteTargets(String(itemPayload.input ?? ""), cwd ?? undefined);
+      for (const file of targets) {
+        const kind = kindOf(file, cwd);
+        const canonical = SimStore.resolveCallerFile(
+          file,
+          { sessionId: "", ...(cwd ? { workspaceRoot: cwd } : {}) },
+          paths,
+        );
+        if (kind === "harness") {
+          const prev = harnessFiles.get(canonical);
+          if (prev === undefined || prev === null || item.updated_at > prev) {
+            harnessFiles.set(canonical, item.updated_at);
+          }
+        } else if (kind === "record") {
+          recordFiles.add(canonical);
+        }
+      }
+    }
+    addHarnessEdits(
+      { source: "t3", session: thread.thread_id, date, provider, model },
+      harnessFiles,
+      [thread.thread_id, ...(claudeNativeIdsByThread.get(thread.thread_id) ?? [])],
+    );
+    if (recordFiles.size) {
+      edits.push({
+        source: "t3",
+        session: thread.thread_id,
+        date,
+        provider,
+        model,
+        files: [...recordFiles],
+        record: true,
+        recorded: false,
+      });
+    }
+
+    // Caller's children still report harness/record edits above, but skip friction, reviews, and other signals.
+    if (isOwnChild) {
+      ownChildren.add(thread.thread_id);
+      excludedSelf += 1;
+      continue;
+    }
+
+    threadsScanned += 1;
+    const delegated = isDelegatedThread(thread.thread_id, payload, lineage);
 
     const flags = delegated
       ? []
@@ -1014,46 +1106,6 @@ function buildReport(input: ReportInput): SimAuditReport {
       }
     }
 
-    const harnessFiles = new Set<string>();
-    const recordFiles = new Set<string>();
-    for (const item of itemsBy.get(thread.thread_id) ?? []) {
-      const itemPayload = parseJson(item.payload_json);
-      const changePaths = Array.isArray(itemPayload.changes)
-        ? itemPayload.changes.map((entry) => str(record(entry).path))
-        : [];
-      const targets =
-        item.type === "file_change"
-          ? [str(itemPayload.fileName), ...changePaths].filter((file): file is string => !!file)
-          : detectShellWriteTargets(String(itemPayload.input ?? ""), cwd ?? undefined);
-      for (const file of targets) {
-        const kind = kindOf(file, cwd);
-        const canonical = SimStore.resolveCallerFile(
-          file,
-          { sessionId: "", ...(cwd ? { workspaceRoot: cwd } : {}) },
-          paths,
-        );
-        if (kind === "harness") harnessFiles.add(canonical);
-        else if (kind === "record") recordFiles.add(canonical);
-      }
-    }
-    addHarnessEdits(
-      { source: "t3", session: thread.thread_id, date, provider, model },
-      [...harnessFiles],
-      [thread.thread_id, ...(claudeNativeIdsByThread.get(thread.thread_id) ?? [])],
-    );
-    if (recordFiles.size) {
-      edits.push({
-        source: "t3",
-        session: thread.thread_id,
-        date,
-        provider,
-        model,
-        files: [...recordFiles],
-        record: true,
-        recorded: false,
-      });
-    }
-
     if (delegated && isCodeReviewTask(thread.title, users[0]?.text)) {
       const lastAssistant = [...messages].reverse().find((row) => row.role === "assistant");
       reviews.set(thread.thread_id, {
@@ -1065,9 +1117,14 @@ function buildReport(input: ReportInput): SimAuditReport {
     }
   }
 
-  const telemetry = input.telemetry.filter(
-    (event) => !("threadId" in event && event.threadId && ownThreads.has(event.threadId)),
-  );
+  const telemetry = input.telemetry.filter((event) => {
+    if (!("threadId" in event) || !event.threadId) return true;
+    if (ownThreads.has(event.threadId)) return false;
+    if (ownChildren.has(event.threadId)) {
+      return event.kind === "unrecorded_harness_edit" || event.kind === "direct_sim_record_edit";
+    }
+    return true;
+  });
   for (const event of telemetry) {
     switch (event.kind) {
       case "unrecorded_harness_edit":
@@ -1146,7 +1203,7 @@ function buildReport(input: ReportInput): SimAuditReport {
     const exclude = new Set([
       ...[caller.sessionId, caller.alsoSessionId]
         .filter((id): id is string => !!id && id.startsWith("cc:"))
-        .map(SimStore.bare),
+        .map(bare),
       ...allT3ClaudeNativeIds,
     ]);
     const scan = scanClaudeLogs(paths, sinceMs, exclude, (file, cwd) => kindOf(file, cwd) !== null);
@@ -1154,9 +1211,14 @@ function buildReport(input: ReportInput): SimAuditReport {
     claudeSessionsScanned = scan.transcripts.length;
     for (const transcript of scan.transcripts) {
       const date = (transcript.lastTs ?? new Date(sinceMs).toISOString()).slice(0, 10);
-      const files = transcript.harnessEdits.map((file) =>
-        SimStore.resolveCallerFile(file, { sessionId: "" }, paths),
-      );
+      const files = new Map<string, string | null>();
+      for (const [file, ts] of transcript.harnessEdits) {
+        const canonical = SimStore.resolveCallerFile(file, { sessionId: "" }, paths);
+        const prev = files.get(canonical);
+        if (prev === undefined || (ts !== null && (prev === null || ts > prev))) {
+          files.set(canonical, ts);
+        }
+      }
       addHarnessEdits(
         {
           source: "claude",
@@ -1165,7 +1227,7 @@ function buildReport(input: ReportInput): SimAuditReport {
           provider: "claudeAgent",
           model: transcript.model,
         },
-        [...new Set(files)],
+        files,
         [transcript.sessionId],
       );
       if (transcript.flags.length) {
@@ -1424,12 +1486,14 @@ function renderInspection(
   page: { readonly from: number; readonly limit: number },
 ): Omit<SimThreadInspectionResult, "threadId"> {
   const runs = runRows.map(runInfo);
-  const entries: Array<{ at: string; order: number; line: string }> = [];
+  const runStartById = new Map(runs.map((run) => [run.runId, run.requestedAt]));
+  const entries: Array<{ at: string; order: number; subOrder: number; line: string }> = [];
   let userTurn = 0;
   for (const run of runs) {
     entries.push({
       at: run.requestedAt,
       order: 0,
+      subOrder: run.ordinal,
       line: `run ${run.ordinal} [${run.provider}/${run.model}] ${run.status}`,
     });
   }
@@ -1442,10 +1506,16 @@ function renderInspection(
       entries.push({
         at: row.created_at,
         order: 1,
+        subOrder: userTurn,
         line: `U${userTurn} [${row.created_at.slice(0, 19).replace("T", " ")}]: ${squashText(own, 600)}`,
       });
     } else {
-      entries.push({ at: row.created_at, order: 3, line: `  assistant: ${squashText(text, 400)}` });
+      entries.push({
+        at: row.created_at,
+        order: 3,
+        subOrder: 0,
+        line: `  assistant: ${squashText(text, 400)}`,
+      });
     }
   }
   for (const item of items) {
@@ -1456,7 +1526,9 @@ function renderInspection(
         : item.type === "command_execution"
           ? `command(${squashText(payload.input, 120)})`
           : `${item.type}(${squashText(payload.title ?? payload.toolName ?? "", 80)})`;
-    entries.push({ at: item.updated_at, order: 2, line: `  tool: ${detail}` });
+    // Anchor tool lines to their run's start + ordinal so pagination stays stable while a run updates items.
+    const at = (item.run_id ? runStartById.get(item.run_id) : undefined) ?? item.updated_at;
+    entries.push({ at, order: 2, subOrder: item.ordinal, line: `  tool: ${detail}` });
   }
   for (const event of events) {
     const payload = parseJson(event.payload_json);
@@ -1464,9 +1536,9 @@ function renderInspection(
       event.event_type === "checkpoint.rollback-requested"
         ? `ROLLBACK requested to ${str(payload.checkpointId) ?? "?"}`
         : `MODEL ${event.event_type}: ${str(payload.providerInstanceId) ?? "?"}/${str(record(payload.modelSelection).model) ?? "?"}`;
-    entries.push({ at: event.occurred_at, order: 4, line });
+    entries.push({ at: event.occurred_at, order: 4, subOrder: 0, line });
   }
-  entries.sort((a, b) => a.at.localeCompare(b.at) || a.order - b.order);
+  entries.sort((a, b) => a.at.localeCompare(b.at) || a.order - b.order || a.subOrder - b.subOrder);
   const lines = entries.map((entry) => entry.line);
   const models =
     [...new Set(runs.map((run) => `${run.provider}/${run.model}`))].join(", ") ||

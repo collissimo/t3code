@@ -10,6 +10,7 @@ import type { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import {
   canonicalHarnessFile,
   classifyHarnessPath,
+  clipText,
   expandHarnessFile,
   expandHomeString,
   type SimAttempt,
@@ -75,7 +76,7 @@ function truncateUtf8(text: string, maxBytes: number): string {
 }
 
 const normalizeText = (text: string) => text.replace(/\s+/g, " ").trim();
-const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+const sameLabel = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 // ── Rule file parsing ────────────────────────────────────────────────
 
@@ -227,14 +228,14 @@ interface RuleContext {
 
 const harnessApplies = (harness: string | undefined, context: RuleContext) =>
   harness === undefined ||
-  sameName(harness, context.driver) ||
-  sameName(harness, context.providerInstanceId);
+  sameLabel(harness, context.driver) ||
+  sameLabel(harness, context.providerInstanceId);
 
 const domainApplies = (domain: string, context: RuleContext) =>
   context.projectName === undefined ||
-  sameName(domain, "global") ||
-  sameName(domain, "unknown") ||
-  sameName(domain, context.projectName);
+  sameLabel(domain, "global") ||
+  sameLabel(domain, "unknown") ||
+  sameLabel(domain, context.projectName);
 
 /**
  * The latest standing outcome under this model, harness and domain decides; a later fix clears a misfire.
@@ -244,7 +245,7 @@ function misfiredHere(attempt: SimAttempt, context: RuleContext): boolean {
     .filter(
       (obs) =>
         obs.retracted === undefined &&
-        sameName(obs.policy, context.model) &&
+        sameLabel(obs.policy, context.model) &&
         harnessApplies(obs.harness, context) &&
         domainApplies(obs.domain, context),
     )
@@ -259,7 +260,7 @@ function removedHere(attempt: SimAttempt, context: RuleContext): boolean {
     attempt.retracted === undefined &&
     harnessApplies(attempt.harness, context) &&
     domainApplies(attempt.domain, context) &&
-    (!attempt.depends_on.includes("model") || sameName(attempt.policy, context.model))
+    (!attempt.depends_on.includes("model") || sameLabel(attempt.policy, context.model))
   );
 }
 
@@ -430,11 +431,12 @@ function packRuleSections(
 // ── SIM tool guide ───────────────────────────────────────────────────
 
 const MAX_WITHHELD_IN_GUIDE = 8;
+const MAX_WITHHELD_ANCHOR_CHARS = 80;
 
 function formatWithheldBullet(withheld: ReadonlyArray<SimWithheldRule>): string {
   const shown = withheld
     .slice(0, MAX_WITHHELD_IN_GUIDE)
-    .map((rule) => `"${rule.anchor}" (${rule.reason})`);
+    .map((rule) => `"${clipText(rule.anchor, MAX_WITHHELD_ANCHOR_CHARS)}" (${rule.reason})`);
   const extra = withheld.length - shown.length;
   const suffix = extra > 0 ? `, +${extra} more` : "";
   return `- SIM withheld these rules from this thread: ${shown.join(", ")}${suffix}. Do not follow them here.`;
@@ -553,7 +555,7 @@ function simInstructionCacheKey(input: {
     input.driver,
     input.model,
     input.projectName ?? "",
-  ].join(":");
+  ].join("\u0000");
 }
 
 export interface SimInstructionCache {

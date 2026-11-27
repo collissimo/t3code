@@ -98,6 +98,12 @@ describe("stemSearchToken", () => {
     assert.strictEqual(stemSearchToken("running"), "run");
     assert.strictEqual(stemSearchToken("misfired"), "misfir");
     assert.strictEqual(stemSearchToken("misfire"), "misfir");
+    assert.strictEqual(stemSearchToken("parsed"), stemSearchToken("parse"));
+    assert.strictEqual(stemSearchToken("filing"), stemSearchToken("file"));
+    assert.strictEqual(stemSearchToken("changed"), stemSearchToken("change"));
+    assert.strictEqual(stemSearchToken("fixes"), stemSearchToken("fix"));
+    assert.strictEqual(stemSearchToken("policies"), stemSearchToken("policy"));
+    assert.strictEqual(stemSearchToken("verified"), stemSearchToken("verify"));
   });
 });
 
@@ -112,11 +118,45 @@ describe("searchProblemsRanked", () => {
   it("requires every word when full matches exist and falls back to partial ranked matches when none match all words", () => {
     const ids = searchProblemsRanked(search, "hook timeout").map((hit) => hit.problem.id);
     assert.deepStrictEqual(ids, ["H"]);
+    const partial = searchProblemsRanked(search, "hook zebra");
     assert.deepStrictEqual(
-      searchProblemsRanked(search, "hook zebra").map((hit) => hit.problem.id),
+      partial.map((hit) => hit.problem.id),
       ["H"],
     );
+    assert.strictEqual(partial[0]?.partial, true);
     assert.deepStrictEqual(searchProblemsRanked(search, "unknown zebra"), []);
+  });
+
+  it("matches inflections, substrings, and returns every hit past 20 without silent capping", () => {
+    const recall = simState([
+      problem("P1", "Schema updated", [
+        attempt("A1", { what: "Changed validation and fixes parser edge cases" }),
+      ]),
+      problem("P2", "Verification step", [
+        attempt("A2", { what: "Verified policies across providers" }),
+      ]),
+    ]);
+    assert.deepStrictEqual(
+      searchProblemsRanked(recall, "change").map((hit) => hit.problem.id),
+      ["P1"],
+    );
+    assert.deepStrictEqual(
+      searchProblemsRanked(recall, "fix").map((hit) => hit.problem.id),
+      ["P1"],
+    );
+    assert.strictEqual(searchProblemsRanked(recall, "verif")[0]?.matchedBy, "substring");
+    assert.deepStrictEqual(
+      searchProblemsRanked(recall, "policy").map((hit) => hit.problem.id),
+      ["P2"],
+    );
+
+    const many = simState(
+      Array.from({ length: 25 }, (_, i) =>
+        problem(`M${i + 1}`, `Hook rule ${i + 1}`, [attempt(`A${i + 1}`)]),
+      ),
+    );
+    assert.strictEqual(searchProblemsRanked(many, "hook").length, 25);
+    assert.strictEqual(searchProblemsRanked(many, "status:live").length, 25);
   });
 
   it("marks a query that matches stems only as stemmed, and exact words as exact", () => {
@@ -263,6 +303,33 @@ describe("buildSimStats hotspots", () => {
       stats.staleOpen.map((item) => item.attemptId),
       ["OLD"],
     );
+  });
+
+  it("clamps staleDays to at least 1 and excludes unconfirmed rows once another session settles that target", () => {
+    const settledAttempt = attempt("A1", {
+      observations: [
+        observation("fixed", { by: "t3:author", source: "self", target: "t1" }),
+        observation("fixed", { by: "t3:other", source: "log", target: "t1" }),
+      ],
+      fixed: ["t1"],
+    });
+    const recentOpen = attempt("A2", { round: "2026-11-27", pending: ["p"] });
+    const stats = buildSimStats(simState([problem("P", "Clamped", [settledAttempt, recentOpen])]), {
+      nowMs: NOW,
+      staleDays: -5,
+    });
+    assert.deepStrictEqual(stats.staleOpen, []);
+    assert.deepStrictEqual(stats.unconfirmedFixes, []);
+  });
+
+  it("caps hotspot rows at 20 and reports the overflow count", () => {
+    const missed25 = Array.from({ length: 25 }, (_, i) =>
+      problem(`M${i + 1}`, `Missed ${i + 1}`, [attempt(`A${i + 1}`, { missed: [`m${i + 1}`] })]),
+    );
+    const text = renderSimStats(buildSimStats(simState(missed25), { nowMs: NOW }));
+    assert.include(text, "- M20 A20:");
+    assert.notInclude(text, "- M21 A21:");
+    assert.include(text, "- … (+5 more)");
   });
 
   it("renders an empty state without NaN or undefined", () => {

@@ -8,6 +8,7 @@ import { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import { vi } from "vite-plus/test";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -589,7 +590,71 @@ describe("SimAuditService", () => {
       // Only people's threads count: the side chat is one, the spawned threads are not.
       expect(flagged.sort()).toEqual(["thread-claude", "thread-codex", "thread-side-chat"]);
       expect(report.signals.delegatedReviews).toBe(1);
-      expect(report.text).not.toContain("own-c");
+      // Caller's own child skips friction/reviews/rollbacks, but still reports unrecorded harness edits.
+      expect(report.text).not.toContain("own-checkpoint");
+      expect(report.text).toMatch(
+        /t3 thread:delegated-task:own-child .* UNRECORDED\?: ~\/\.claude\/AGENTS\.md/,
+      );
+    }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
+  });
+
+  it.effect("flags later-day unrecorded edits even when an earlier day was recorded", () => {
+    const sb = sandbox();
+    return Effect.gen(function* () {
+      const sim = yield* SimService;
+      const writer = {
+        sessionId: "t3:thread-long",
+        threadId: ThreadId.make("thread-long"),
+        model: "claude-opus-5-5",
+        driver: "claudeAgent",
+        workspaceRoot: "/work/repo",
+      };
+      // The session records its AGENTS.md change on 2026-11-10, then edits the file again on 11-12.
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 10, 10, 12) })),
+        () =>
+          Effect.gen(function* () {
+            yield* sim.read(writer, { action: "index" });
+            yield* sim.applyHarnessChange(writer, {
+              file: "~/.claude/AGENTS.md",
+              oldText: `- ${RULE}\n`,
+              newText: `- ${RULE}\n- Run the build before you commit.\n`,
+              attempt: {
+                new: "Agents skip build checks",
+                action: "add",
+                what: "Build rule",
+                why: "Broken builds landed",
+                anchor: "Run the build before you commit",
+                depends_on: ["model"],
+                predicted: ["skipped-build-checks"],
+                expect: "Builds run before commits",
+                files: ["~/.claude/AGENTS.md"],
+              },
+            });
+          }),
+        () => Effect.sync(() => vi.useRealTimers()),
+      );
+      yield* seedThread(
+        {
+          id: "thread-long",
+          title: "Long-lived session",
+          provider: "claudeAgent",
+          runs: [{ model: "claude-opus-5-5", user: "Update rules" }],
+        },
+        12,
+      );
+      yield* seedItem(
+        "thread-long",
+        "file_change",
+        { fileName: NodePath.join(sb.harnessDir, "AGENTS.md") },
+        12,
+      );
+      const audit = yield* SimAuditService;
+      const report = yield* audit.audit(auditor, {
+        since: "2026-11-01",
+        includeClaudeLogs: false,
+      });
+      expect(report.text).toMatch(/t3 thread-long .* UNRECORDED\?: ~\/\.claude\/AGENTS\.md/);
     }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
   });
 

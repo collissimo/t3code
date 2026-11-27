@@ -242,9 +242,26 @@ describe("detectShellWriteTargets", () => {
     },
     {
       name: "ignores a cd in a pipeline, a background job, or a fallback",
-      command: "cd p | cat; cd bg & true ||\ncd q; cd a || cd b; echo > f",
+      command: "cd p | cat; cd bg & true ||\ncd q; cd a || cd b; echo > f; cd /x || touch y",
       cwd: "/work",
-      targets: ["/work/a/f"],
+      targets: ["/work/a/f", "/work/a/y"],
+    },
+    {
+      name: "normalizes backup traversals and tracks pushd/popd",
+      command:
+        "touch /w/notes/backups/../../AGENTS.md; touch ~/.claude/backups/../AGENTS.md; pushd ~/.claude && echo x >> CLAUDE.md; popd && rm notes/a.md",
+      cwd: "/w",
+      targets: ["/w/AGENTS.md", "~/.claude/AGENTS.md", "~/.claude/CLAUDE.md", "/w/notes/a.md"],
+    },
+    {
+      name: "reads past wrapper flags and truncate size options",
+      command: "sudo -u root cp a ~/.claude/AGENTS.md; truncate -s 0 ~/.claude/CLAUDE.md",
+      targets: ["~/.claude/AGENTS.md", "~/.claude/CLAUDE.md"],
+    },
+    {
+      name: "joins trailing-slash destinations with source basenames",
+      command: "cp gate.mjs ~/.claude/hooks/; mv rule.md ~/.claude/notes/",
+      targets: ["~/.claude/hooks/gate.mjs", "rule.md", "~/.claude/notes/rule.md"],
     },
     {
       name: "reads past line continuations and shell keywords",
@@ -260,13 +277,13 @@ describe("detectShellWriteTargets", () => {
     {
       name: "takes the target directory over the last operand",
       command:
-        "cp -t /one a; cp --target-directory=/two a; ln -s -t/three a; cp -rt /four a; install --target-directory /five -m 644 a",
-      targets: ["/one", "/two", "/three", "/four", "/five"],
+        "cp -t /one a; cp --target-directory=/two a; ln -s -t/three a; cp -rt /four a; install --target-directory /five -m 644 a; cp -t ~/.claude/hooks gate.mjs",
+      targets: ["/one/a", "/two/a", "/three/a", "/four/a", "/five/a", "~/.claude/hooks/gate.mjs"],
     },
     {
       name: "keeps the removed sources of mv -t",
       command: "mv -t /dest a",
-      targets: ["/dest", "a"],
+      targets: ["a", "/dest/a"],
     },
     {
       name: "skips option arguments",
@@ -307,6 +324,10 @@ describe("isCodeReviewTask", () => {
     ["sim review", ""],
     ["Round 2 review", ""],
     ["Verify review findings", ""],
+    ["Worker", "Act as the review sub-agent for this task.\n\nRead the notes and report."],
+    ["audit:checkout", "Workdir /work/app (branch t3/checkout). Read the brief first."],
+    ["pruefen:code", "Repo /work/app. Lies zuerst den Auftrag."],
+    ["Überprüfe den Code", ""],
   ])("accepts %s", (title, prompt) => {
     assert.isTrue(SimObserverReactor.isCodeReviewTask(title, prompt));
   });
@@ -320,6 +341,21 @@ describe("isCodeReviewTask", () => {
     ["review the clinical evidence", ""],
     ["Implement the parser", `${"Handle every token. ".repeat(40)}Verify with the tests.`],
     ["Plot the gradient", "Use the code in the notebook."],
+    ["Add dark mode", "Implement dark mode. Run the tests and verify they pass."],
+    ["Implement parser fix", "Update parser on branch foo, then verify the build and commit."],
+    ["Refactor the grading module", "Refactor the grading module in the codebase."],
+    ["Write tests for the review queue feature", ""],
+    ["Explore the repository", "Explore the repository and audit where logging is configured."],
+    ["Implement the search filter", "Implement the filter and review the code afterwards."],
+    ["Verify the login flow", "Run the tests afterwards."],
+    [
+      "Stage A: review fixes",
+      "Act as the implementation sub-agent for this task.\n\nFix the review findings in the diff.",
+    ],
+    [
+      "seite",
+      "Arbeitsordner: /work/app (Zweig t3/x). Lies zuerst brief.md; das ist der Auftrag mit Prüfpunkten für den Code.",
+    ],
   ])("rejects %s", (title, prompt) => {
     assert.isFalse(SimObserverReactor.isCodeReviewTask(title, prompt));
   });

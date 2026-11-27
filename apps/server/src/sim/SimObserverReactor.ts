@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { splitTaskPrompt } from "../mcp/delegatedTaskModes.ts";
 import { USER_STOP_REASON } from "../orchestration-v2/RunExecutionService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -47,13 +48,15 @@ const MEMORY_CAP = 512;
 const EXCERPT_LIMIT = 300;
 const TERMINAL_RUN_STATUSES = new Set(["completed", "interrupted", "failed", "cancelled"]);
 const REVIEW_TERM =
-  /\b(?:review\w*|re-?check\w*|audit\w*|verif\w*|grad(?:e|ed|es|er|ers|ing)|critics?|critiques?|(?:gegen)?prüf\w*)\b/i;
+  /(?<![\p{L}\p{N}_])(?:review\p{L}*|re-?check\p{L}*|audit\p{L}*|verif\p{L}*|grad(?:e|ed|es|er|ers|ing)|critics?|critiques?|kritik\p{L}*|fact-?check\p{L}*|(?:über|gegen|nach)?(?:prüf|pruef)\p{L}*)(?![\p{L}\p{N}_])/iu;
 const CODE_CUE =
-  /\b(?:code(?:base)?|diffs?|PRs?|pull requests?|branch(?:es)?|commits?|patch(?:es)?|repo(?:s|sitory|sitories)?|harness|SIM|tests?|adversarial)\b/i;
+  /\b(?:code(?:base)?|diffs?|PRs?|pull requests?|branch(?:es)?|commits?|patch(?:es)?|repo(?:s|sitory|sitories)?|harness|SIM|adversarial)\b/i;
 // Any research prompt asks for "findings" or a "verdict", so these only count in a title.
 const VERDICT_CUE = /\b(?:findings|verdict)\b/i;
 const REVIEW_ROLE =
   /\b(?:independent grader|round[- ]?\d+ (?:re-?)?review|check(?:ing)? (?:[\w-]+ ){0,3}(?:diffs?|patch(?:es)?|pull request|PR))\b/i;
+const IMPLEMENTATION_TITLE =
+  /^\s*(?:please\s+)?(?:implement|build|add|create|fix|refactor|write|update|migrate|remove|delete|rename|port|wire|explore|investigate|debug|configure|set ?up|document)\b/i;
 const REVIEW_PROMPT_OPENING = 600;
 const CLAUDE_DRIVER = "claudeAgent";
 
@@ -70,12 +73,24 @@ function firstSighting(seen: Map<string, true>, key: string): boolean {
   return true;
 }
 
-/** Whether a delegated task asks for a review of code or the harness, by its title and opening. */
+const firstSentence = (text: string) => {
+  const head = text.trim().slice(0, REVIEW_PROMPT_OPENING);
+  const end = head.search(/[.!?\n](?:\s|$)/);
+  return end === -1 ? head : head.slice(0, end + 1);
+};
+
+/** Whether a delegated task asks for a review of code or the harness, by its role, title and opening. */
 export function isCodeReviewTask(title: string, prompt = ""): boolean {
-  // Prompts close with boilerplate such as "verify with the tests", so only the opening counts.
-  const text = `${title}\n${prompt.slice(0, REVIEW_PROMPT_OPENING)}`;
-  if (REVIEW_ROLE.test(text)) return true;
-  return REVIEW_TERM.test(text) && (CODE_CUE.test(text) || VERDICT_CUE.test(title));
+  const { role, task } = splitTaskPrompt(prompt);
+  if (role === "review") return true;
+  if (role === "implementation" || role === "test" || IMPLEMENTATION_TITLE.test(title))
+    return false;
+  // Prompts are full of "verify with the tests" and "Prüfpunkte" boilerplate, so a review term
+  // counts in the title or the first sentence only; code must show in the title or the opening.
+  const opening = `${title}\n${task.slice(0, REVIEW_PROMPT_OPENING)}`;
+  if (REVIEW_ROLE.test(opening)) return true;
+  if (REVIEW_TERM.test(title)) return CODE_CUE.test(opening) || VERDICT_CUE.test(title);
+  return REVIEW_TERM.test(firstSentence(task)) && CODE_CUE.test(opening);
 }
 
 /** Calendar day in the server's zone, matching how standalone sim.mjs stamps `day` and `round`. */
@@ -170,29 +185,51 @@ const COMMAND_WRAPPERS = new Set(
 // `node sim.mjs` needs no exemption: a JS runner writes no operand, while `cp x sim.mjs` must count.
 const ALL_ARG_WRITERS = new Set(["rm", "unlink", "truncate", "touch", "shred", "tee", "mv"]);
 const LAST_ARG_WRITERS = new Set(["cp", "install", "ln", "rsync"]);
-const SUFFIX_OPTION = /^(?:-[a-zA-Z]*S|--suffix)$/;
+const SUFFIX_OR_TARGET_OPTION = /^(?:-[a-zA-Z]*[St]|--(?:suffix|target-directory))$/;
 /** Per command, the options whose following word is their argument rather than a file it writes. */
 const VALUE_OPTIONS = new Map([
   ["touch", /^(?:-[acfhm]*[drt]|--date|--reference)$/],
-  ["cp", SUFFIX_OPTION],
-  ["mv", SUFFIX_OPTION],
-  ["ln", SUFFIX_OPTION],
-  ["install", /^(?:-[a-zA-Z]*[gmoS]|--(?:group|mode|owner|suffix))$/],
+  ["truncate", /^(?:-[a-zA-Z]*[rs]|--(?:reference|size))$/],
+  ["cp", SUFFIX_OR_TARGET_OPTION],
+  ["mv", SUFFIX_OR_TARGET_OPTION],
+  ["ln", SUFFIX_OR_TARGET_OPTION],
+  ["install", /^(?:-[a-zA-Z]*[gmoSt]|--(?:group|mode|owner|suffix|target-directory))$/],
   ["rsync", /^(?:-[a-zA-Z]*[ef]|--(?:rsh|filter|exclude|include|exclude-from|include-from))$/],
+]);
+const WRAPPER_VALUE_OPTIONS = new Map([
+  [
+    "sudo",
+    /^(?:-[a-zA-Z]*[CghprtUu]|--(?:chdir|close-from|group|host|prompt|role|type|other-user|user))$/,
+  ],
+  ["env", /^(?:-[a-zA-Z]*[CSu]|--(?:chdir|split-string|unset))$/],
+  ["exec", /^-a$/],
 ]);
 const TARGET_DIR_OPTION = /^(?:--target-directory(?:=|$)|-(?:(?![gmoSt])[a-zA-Z])*t)(.*)$/;
 const DEVICE_TARGET = /^\/dev\/(?:null|stderr|stdout|tty|fd\/\d+)$/;
 const BACKUP_TARGET = /(?:^|\/)backups\/|\.bak(?:-|$)/;
 const HOME_PREFIX = /^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/;
 
-/** `words` from the command name on, past assignments, `sudo` and the like. */
+/** `words` from the command name on, past assignments, `sudo` (and its flags), and the like. */
 function commandWords(words: ReadonlyArray<ShellWord>): ReadonlyArray<ShellWord> {
-  const start = words.findIndex(
-    (word) =>
-      !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word.value) &&
-      !COMMAND_WRAPPERS.has(NodePath.basename(word.value)),
-  );
-  return start === -1 ? [] : words.slice(start);
+  let i = 0;
+  while (i < words.length) {
+    const value = words[i]!.value;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(value)) {
+      i += 1;
+      continue;
+    }
+    const base = NodePath.basename(value);
+    if (!COMMAND_WRAPPERS.has(base)) break;
+    i += 1;
+    const valueOption = WRAPPER_VALUE_OPTIONS.get(base);
+    while (i < words.length && words[i]!.value.startsWith("-")) {
+      const opt = words[i]!.value;
+      i += 1;
+      if (opt === "--") break;
+      if (valueOption?.test(opt) && i < words.length) i += 1;
+    }
+  }
+  return words.slice(i);
 }
 
 /** The DIR of `-t DIR` or `--target-directory=DIR`, which takes the last operand's place. */
@@ -202,6 +239,26 @@ function targetDirectory(args: ReadonlyArray<ShellWord>): ShellWord | undefined 
     if (match) return match[1] ? { ...word, value: match[1] } : args[index + 1];
   }
   return undefined;
+}
+
+/** Combine a directory destination with each source operand's basename so file classifiers see the written file. */
+function joinTargetDirectory(
+  directory: ShellWord,
+  sources: ReadonlyArray<ShellWord>,
+): Array<ShellWord> {
+  if (sources.length === 0) return [directory];
+  const joined: Array<ShellWord> = [];
+  for (const source of sources) {
+    if (source.dynamic) continue;
+    const base = NodePath.posix.basename(source.value.replace(/\/+$/, ""));
+    if (!base || base === "." || base === "..") continue;
+    joined.push({
+      kind: "word",
+      value: NodePath.posix.join(directory.value, base),
+      dynamic: directory.dynamic,
+    });
+  }
+  return joined.length > 0 ? joined : [directory];
 }
 
 function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> {
@@ -217,8 +274,21 @@ function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> 
     name !== "rsync" && (LAST_ARG_WRITERS.has(name) || name === "mv")
       ? targetDirectory(args)
       : undefined;
-  if (ALL_ARG_WRITERS.has(name)) return directory ? [...operands, directory] : operands;
-  if (LAST_ARG_WRITERS.has(name)) return directory ? [directory] : operands.slice(-1);
+  if (directory) {
+    const written = joinTargetDirectory(directory, operands);
+    return name === "mv" ? [...operands, ...written] : written;
+  }
+  if (
+    operands.length >= 2 &&
+    (LAST_ARG_WRITERS.has(name) || name === "mv") &&
+    operands[operands.length - 1]!.value.endsWith("/")
+  ) {
+    const sources = operands.slice(0, -1);
+    const written = joinTargetDirectory(operands[operands.length - 1]!, sources);
+    return name === "mv" ? [...sources, ...written] : written;
+  }
+  if (ALL_ARG_WRITERS.has(name)) return operands;
+  if (LAST_ARG_WRITERS.has(name)) return operands.slice(-1);
   if (name === "sed" || name === "perl") {
     const inPlace = args.some(
       (word) => /^-[a-zA-Z]*i/.test(word.value) || word.value.startsWith("--in-place"),
@@ -241,37 +311,81 @@ function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> 
   return [];
 }
 
+/** Normalize `.` / `..` segments while keeping `~` / `$HOME` prefixes intact; null if `..` escapes `$HOME`. */
+function normalizeShellPath(path: string): string | null {
+  const home = HOME_PREFIX.exec(path);
+  if (!home) return NodePath.posix.normalize(path);
+  const prefix = home[0];
+  const rest = path.slice(prefix.length);
+  if (!rest) return prefix;
+  const normalized = NodePath.posix.normalize(rest.slice(1));
+  if (normalized === ".." || normalized.startsWith("../")) return null;
+  return normalized === "." ? prefix : `${prefix}/${normalized}`;
+}
+
 /**
  * `path` as seen from the shell directory `cwd`, or null when that cannot be known. An empty `cwd`
  * leaves a relative path for the caller to resolve.
  */
 function resolveShellPath(cwd: string | null, path: string): string | null {
-  if (NodePath.isAbsolute(path) || HOME_PREFIX.test(path)) return path;
+  if (NodePath.isAbsolute(path) || HOME_PREFIX.test(path)) return normalizeShellPath(path);
   if (cwd === null || path.startsWith("~")) return null;
-  if (!cwd) return path;
-  if (!HOME_PREFIX.test(cwd)) return NodePath.join(cwd, path);
-  const joined = NodePath.posix.join(cwd, path);
-  return HOME_PREFIX.test(joined) ? joined : null;
+  if (!cwd) return normalizeShellPath(path);
+  if (!HOME_PREFIX.test(cwd)) return normalizeShellPath(NodePath.join(cwd, path));
+  return normalizeShellPath(`${cwd.replace(/\/+$/, "")}/${path}`);
 }
 
-/** The shell directory after one command: moved by `cd`, null when its argument is unresolvable. */
-function directoryAfter(cwd: string | null, words: ReadonlyArray<ShellWord>): string | null {
+/** The shell directory after one command: moved by `cd`/`pushd`/`popd`, null when unresolvable. */
+function directoryAfter(
+  cwd: string | null,
+  dirStack: Array<string | null>,
+  words: ReadonlyArray<ShellWord>,
+): string | null {
   const [command, ...args] = commandWords(words);
-  if (command?.value !== "cd") return cwd;
-  const directory = args.find((word) => word.value === "-" || !word.value.startsWith("-"));
-  if (!directory) return "~";
-  if (directory.dynamic || directory.value === "-" || /[*?[]/.test(directory.value)) return null;
-  return resolveShellPath(cwd, directory.value);
+  const name = command?.value;
+  if (name === "cd") {
+    const directory = args.find((word) => word.value === "-" || !word.value.startsWith("-"));
+    if (!directory) return "~";
+    if (directory.dynamic || directory.value === "-" || /[*?[]/.test(directory.value)) return null;
+    return resolveShellPath(cwd, directory.value);
+  }
+  if (name === "pushd") {
+    const directory = args.find((word) => !word.value.startsWith("-"));
+    if (!directory) {
+      if (dirStack.length === 0) return cwd;
+      const top = dirStack.pop()!;
+      dirStack.push(cwd);
+      return top;
+    }
+    if (directory.dynamic || /^[+-]\d+$/.test(directory.value) || /[*?[]/.test(directory.value)) {
+      dirStack.push(cwd);
+      return null;
+    }
+    dirStack.push(cwd);
+    return resolveShellPath(cwd, directory.value);
+  }
+  if (name === "popd") {
+    const arg = args.find((word) => !word.value.startsWith("-"));
+    if (arg && /^[+-]\d+$/.test(arg.value)) return null;
+    return dirStack.length > 0 ? dirStack.pop()! : cwd;
+  }
+  return cwd;
 }
 
 /**
  * Conservative list of paths a Bash command writes, removes, or renames. Relative paths resolve
- * against `initialCwd` and each `cd` since; unresolvable ones, devices, and backups are skipped.
+ * against `initialCwd` and each `cd`/`pushd`/`popd` since; unresolvable ones, devices, and backups are skipped.
  */
 export function detectShellWriteTargets(command: string, initialCwd = ""): Array<string> {
   const targets = new Set<string>();
-  const subshells: Array<string | null> = [];
+  const subshells: Array<{
+    cwd: string | null;
+    deferredCwd: string | null | undefined;
+    dirStack: Array<string | null>;
+  }> = [];
   let cwd: string | null = initialCwd;
+  let deferredCwd: string | null | undefined;
+  let dirStack: Array<string | null> = [];
   let words: Array<ShellWord> = [];
   let redirected: Array<ShellWord> = [];
   let previousOp = ";";
@@ -282,8 +396,24 @@ export function detectShellWriteTargets(command: string, initialCwd = ""): Array
         targets.add(path);
     }
     // A `cd` in a pipeline, a background job, or an `||` fallback does not move what follows.
-    if (previousOp !== "|" && previousOp !== "||" && nextOp !== "|" && nextOp !== "&")
-      cwd = directoryAfter(cwd, words);
+    // A `cd` guarded by `||` moves `cwd` only after the fallback list ends, never inside the fallback.
+    if (previousOp !== "|" && previousOp !== "||" && nextOp !== "|" && nextOp !== "&") {
+      const nextCwd = directoryAfter(cwd, dirStack, words);
+      if (nextOp === "||") {
+        if (nextCwd !== cwd) deferredCwd = nextCwd;
+      } else {
+        cwd = nextCwd;
+      }
+    }
+    if (
+      deferredCwd !== undefined &&
+      nextOp !== "||" &&
+      nextOp !== "(" &&
+      !(nextOp === "\n" && words.length === 0)
+    ) {
+      cwd = deferredCwd;
+      deferredCwd = undefined;
+    }
     // A newline right after `|` or `||` continues that command line.
     if (nextOp !== "\n" || words.length > 0) previousOp = nextOp;
     words = [];
@@ -294,10 +424,16 @@ export function detectShellWriteTargets(command: string, initialCwd = ""): Array
     const token = tokens[i]!;
     if (token.kind === "op") {
       flush(token.value);
-      if (token.value === "(") subshells.push(cwd);
-      else if (token.value === ")") {
+      if (token.value === "(") {
+        subshells.push({ cwd, deferredCwd, dirStack: [...dirStack] });
+        deferredCwd = undefined;
+      } else if (token.value === ")") {
         const outer = subshells.pop();
-        if (outer !== undefined) cwd = outer;
+        if (outer !== undefined) {
+          cwd = outer.cwd;
+          deferredCwd = outer.deferredCwd;
+          dirStack = outer.dirStack;
+        }
       }
     } else if (token.kind === "redir") {
       const target = tokens[i + 1];

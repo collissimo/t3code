@@ -7,6 +7,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerSettings from "../serverSettings.ts";
 import {
+  DAY_MS,
   SimService,
   SimServiceError,
   classifyHarnessPath,
@@ -17,7 +18,7 @@ import {
 import * as SimStore from "./SimStore.ts";
 
 const RECENT_RUNS_LIMIT = 256;
-const REVIEW_TELEMETRY_DEFAULT_WINDOW_MS = 7 * 86_400_000;
+const REVIEW_TELEMETRY_DEFAULT_WINDOW_MS = 7 * DAY_MS;
 
 const isSimServiceError = Schema.is(SimServiceError);
 
@@ -49,9 +50,7 @@ const threadCaller = (threadId: string, workspaceRoot?: string) => ({
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
-  // Journal writes wait up to SIM_LOCK_WAIT_MS on sim.lock; seen epochs and telemetry must not queue behind that.
   const journalWrites = yield* Semaphore.make(1);
-  const metaWrites = yield* Semaphore.make(1);
   const recent = new Map<string, Set<string>>();
   let readCache: { readonly fingerprint: string; readonly loaded: SimStore.SimLoaded } | null =
     null;
@@ -177,8 +176,8 @@ const make = Effect.gen(function* () {
     resetThreadSeenEpoch: Effect.fn("SimService.resetThreadSeenEpoch")(
       function* (threadId: ThreadId, extraSessionIds?: ReadonlyArray<string>) {
         const paths = pathsOf(yield* simSettings);
-        return yield* metaWrites.withPermits(1)(
-          attempt(() => SimStore.resetThreadSeenEpoch(paths, threadId, extraSessionIds)),
+        return yield* attempt(() =>
+          SimStore.resetThreadSeenEpoch(paths, threadId, extraSessionIds),
         );
       },
       Effect.catchCause((cause) =>
@@ -189,10 +188,8 @@ const make = Effect.gen(function* () {
     trackProviderThread: Effect.fn("SimService.trackProviderThread")(
       function* ({ threadId, providerThreadId, extraSessionIds }) {
         const paths = pathsOf(yield* simSettings);
-        return yield* metaWrites.withPermits(1)(
-          attempt(() =>
-            SimStore.trackProviderThread(paths, threadId, providerThreadId, extraSessionIds),
-          ),
+        return yield* attempt(() =>
+          SimStore.trackProviderThread(paths, threadId, providerThreadId, extraSessionIds),
         );
       },
       Effect.catchCause((cause) =>
@@ -214,9 +211,7 @@ const make = Effect.gen(function* () {
       function* (event) {
         const sim = yield* simSettings;
         if (!sim.enabled) return;
-        yield* metaWrites.withPermits(1)(
-          attempt(() => SimStore.appendTelemetry(pathsOf(sim), event)),
-        );
+        yield* attempt(() => SimStore.appendTelemetry(pathsOf(sim), event));
       },
       Effect.catchCause((cause) => Effect.logWarning("SIM telemetry failed", cause)),
     ),

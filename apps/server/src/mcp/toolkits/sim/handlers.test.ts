@@ -552,5 +552,9 @@ it("advertises compact flat schemas without any caller identity field", () => {
   const simReadProps = (
     advertisedJsonSchema(SimToolkit.tools.sim_read) as { properties: Record<string, unknown> }
   ).properties;
-  expect(simReadProps.days).toEqual({ type: "number" });
+  expect(simReadProps.days).toMatchObject({ type: "number", exclusiveMinimum: 0 });
+  expect(simReadProps.staleDays).toMatchObject({ type: "integer", minimum: 1, maximum: 3650 });
+  expect(simReadProps.limit).toMatchObject({ type: "integer", minimum: 1, maximum: 500 });
+  expect(simReadProps.from).toMatchObject({ type: "integer", minimum: 1 });
+  expect(simReadProps.page).toMatchObject({ type: "integer", minimum: 1 });
 });

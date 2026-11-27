@@ -361,6 +361,7 @@ describe("SimService reads", () => {
         { action: "show", ids: ["P1"] },
         { action: "find", query: "build" },
         { action: "stats" },
+        { action: "review", policy: "claude-opus-5-5" },
         { action: "check" },
         { action: "by_file", file: sb.agents },
       ] as const;

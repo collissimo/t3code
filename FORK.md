@@ -249,7 +249,14 @@ epochs per thread). Nothing lives in SQLite, so the fork adds no database migrat
   direct edits of the SIM record files, checkpoint rollbacks, model switches after the first turn,
   runs a person stopped and followed up, completed review tasks, and models seen for the first
   time. `SimAuditService` reads it back for the audit.
-- `sim_read` also supports `stats` (per-model/harness scorecard and hotspots), stemmed ranked `find` with `status:`/`file:`/`model:`/`harness:` filters, and `inspect_thread` pagination (`from`, `limit`), backed by stat-validated read caching and unified shell-write and code-review audit detectors.
+- `sim_read` adds `stats` (a scorecard per model and harness, plus hotspots), a ranked `find`
+  (stems, substrings, `status:`/`file:`/`model:`/`harness:` filters, partial matches when no
+  entry has every word; standalone `sim.mjs find` still matches substrings only) and paged
+  `inspect_thread`. Reads are cached behind a stat fingerprint of the record files and never wait
+  on `sim.lock`. A `misfired` outcome withholds a rule only in the domain it was seen in, and the
+  guide lists the rules it withheld. The audit treats threads that agents spawned as agents' work
+  (no correction flags) and counts a delegated task as a review by its `delegate_task` role, then
+  its title.
 
 Code: `apps/server/src/sim/`, `apps/server/src/mcp/toolkits/sim/`,
 `packages/contracts/src/settings.ts` (`sim`),

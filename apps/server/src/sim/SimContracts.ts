@@ -45,17 +45,29 @@ export const SIM_LINK_INVERSE: Readonly<Record<SimLinkKind, SimLinkKind>> = {
 };
 
 /** A session id without its `cc:`/`t3:` prefix so both spellings identify the same session. */
-export const bare = (id: string): string => String(id).replace(/^(cc|t3):/, "");
+export const bare = (id: string) => String(id).replace(/^(cc|t3):/, "");
 
 /** The harness a record was made under; Claude Code sessions recorded by sim.mjs carry none. */
 export const effectiveHarness = (record: {
   readonly harness?: string | undefined;
   readonly by: string;
-}): string | undefined =>
-  record.harness ?? (record.by.startsWith("cc:") ? "claudeAgent" : undefined);
+}) => record.harness ?? (record.by.startsWith("cc:") ? "claudeAgent" : undefined);
 
-/** Non-retracted observations on an attempt. */
-export const standing = (attempt: SimAttempt): ReadonlyArray<SimObservation> =>
+export const SIM_FAILURE_RESULTS: ReadonlySet<SimResult> = new Set([
+  "missed",
+  "regressed",
+  "misfired",
+]);
+
+export const DAY_MS = 86_400_000;
+
+export const pluralize = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+export const clipText = (text: string, max: number) =>
+  text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+
+export const standing = (attempt: SimAttempt) =>
   attempt.observations.filter((obs) => !obs.retracted);
 
 export const FORK_FAMILY_REASON =
@@ -65,7 +77,7 @@ export const FORK_FAMILY_REASON =
 export function sharesFamily(
   attempt: Pick<SimAttempt, "by" | "also" | "sample">,
   sessionIds: ReadonlyArray<string>,
-): boolean {
+) {
   const authors = [attempt.by, attempt.also, attempt.sample].filter(
     (id): id is string => !!id && id !== SIM_UNKNOWN,
   );
@@ -75,8 +87,8 @@ export function sharesFamily(
 }
 
 /**
- * Why a reported fix cannot settle the prediction, or null when it can. Matches sim.mjs and also
- * compares session ids without their `cc:`/`t3:` kind, plus the caller's fork/side-chat family.
+ * Why a reported fix cannot settle the prediction, or null when it can. Matches sim.mjs for
+ * `by`/`also` (exact) and `sample` (prefix-stripped), plus the caller's fork/side-chat family.
  */
 export function ownReport(
   attempt: Pick<SimAttempt, "by" | "also" | "sample" | "backfilled">,
@@ -85,16 +97,16 @@ export function ownReport(
 ): string | null {
   const names = (record: { readonly by: string; readonly also?: string | undefined }) =>
     [record.by, record.also].filter((id): id is string => !!id && id !== SIM_UNKNOWN);
-  const same = (a: string, b: string) => a === b || bare(a) === bare(b);
   if (obs.source === "self") return "self-reported";
   if (obs.by === SIM_UNKNOWN) return "the reporting session is unknown";
   const reporters = names(obs);
-  if (reporters.some((id) => names(attempt).some((author) => same(id, author)))) {
+  const authors = names(attempt);
+  if (reporters.some((id) => authors.includes(id))) {
     return attempt.backfilled
       ? "reported by the session that recorded the change"
       : "same session as the change";
   }
-  if (attempt.sample !== SIM_UNKNOWN && reporters.some((id) => same(id, attempt.sample))) {
+  if (attempt.sample !== SIM_UNKNOWN && reporters.some((id) => bare(id) === bare(attempt.sample))) {
     return "same session as the change";
   }
   if (forkFamilySessionIds && sharesFamily(attempt, forkFamilySessionIds)) {
@@ -104,8 +116,7 @@ export function ownReport(
   return null;
 }
 
-/** True when an observation confirms and settles a `fixed` prediction. */
-export const settlesFix = (attempt: SimAttempt, obs: SimObservation): boolean =>
+export const settlesFix = (attempt: SimAttempt, obs: SimObservation) =>
   obs.result === "fixed" && !ownReport(attempt, obs);
 
 /** Journal event format version. Stays 2 for full replay compatibility with standalone sim.mjs. */

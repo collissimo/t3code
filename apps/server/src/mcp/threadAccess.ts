@@ -30,7 +30,7 @@ import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes
 import { fencingLinkOrigin } from "./linkOrigin.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
-const delegatedTaskPrefix = "thread:delegated-task:";
+export const delegatedTaskPrefix = "thread:delegated-task:";
 
 const suggestedThreadId = (threadId: ThreadId) => {
   if (!threadId.startsWith(delegatedTaskPrefix)) return ThreadId.make(`mcp:${threadId}`);

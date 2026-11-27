@@ -148,9 +148,22 @@ export const providerOptionDescriptors = (
 ): ReadonlyArray<ProviderOptionDescriptor> =>
   provider?.models.flatMap((model) => model.capabilities?.optionDescriptors ?? []) ?? [];
 
+const ROLE_PREAMBLE = /^\s*Act as the (\w+) sub-agent for this task\.\s*/;
+
 /** The task as its child receives it, with the role the caller asked for. */
 export function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
   return input.role === undefined || input.role === "general"
     ? input.task
     : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
+}
+
+/** The role `taskPrompt` put in front of a delegated task, and the task after it. */
+export function splitTaskPrompt(prompt: string): {
+  readonly role: string | undefined;
+  readonly task: string;
+} {
+  const match = ROLE_PREAMBLE.exec(prompt);
+  return match
+    ? { role: match[1], task: prompt.slice(match[0].length) }
+    : { role: undefined, task: prompt };
 }
