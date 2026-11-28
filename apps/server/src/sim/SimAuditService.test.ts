@@ -8,6 +8,7 @@ import { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import { vi } from "vite-plus/test";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -160,6 +161,7 @@ const seedWorld = (harnessDir: string) =>
         depends_on: ["model"],
         predicted: ["paraphrased-build-errors"],
         expect: "Errors appear verbatim",
+        files: ["~/.claude/notes/build-notes.md"],
       },
     });
     yield* seedThread(
@@ -359,13 +361,39 @@ describe("SimAuditService", () => {
       const inspection = yield* audit.inspectThread(auditor, "thread-co");
       expect(inspection.threadId).toBe("thread-codex");
       expect(inspection.text.split("\n")).toEqual([
-        "Thread thread-codex | Refactor parser | models: codex/gpt-5 | runs: 2 | user turns: 2 | has interrupted runs",
+        "Thread thread-codex | Refactor parser | models: codex/gpt-5 | runs: 2 | user turns: 2 | has interrupted runs | lines 1-5 of 5",
         "run 1 [codex/gpt-5] interrupted",
         "U1 [2026-11-11 10:01:00]: Refactor the parser",
         "run 2 [codex/gpt-5] completed",
         "U2 [2026-11-11 10:02:00]: Stop, keep the old API instead",
         "ROLLBACK requested to checkpoint-7",
       ]);
+      expect(inspection).toMatchObject({ totalLines: 5, nextFrom: null });
+
+      const page = yield* audit.inspectThread(auditor, "thread-co", { from: 2, limit: 2 });
+      expect(page).toMatchObject({ totalLines: 5, nextFrom: 4 });
+      expect(page.text.split("\n").slice(1)).toEqual([
+        "U1 [2026-11-11 10:01:00]: Refactor the parser",
+        "run 2 [codex/gpt-5] completed",
+        "... (2 more lines; read on with inspect_thread from=4)",
+      ]);
+      expect(page.text).toContain("| lines 2-3 of 5\n");
+
+      const last = yield* audit.inspectThread(auditor, "thread-co", { from: 4, limit: 2 });
+      expect(last.nextFrom).toBeNull();
+      expect(last.text.split("\n").slice(1)).toEqual([
+        "U2 [2026-11-11 10:02:00]: Stop, keep the old API instead",
+        "ROLLBACK requested to checkpoint-7",
+      ]);
+
+      const past = yield* audit.inspectThread(auditor, "thread-co", { from: 9 });
+      expect(past).toMatchObject({ totalLines: 5, nextFrom: null });
+      expect(past.text.split("\n")).toHaveLength(1);
+
+      for (const options of [{ from: 0 }, { from: 1.5 }, { limit: 0 }, { limit: Number.NaN }]) {
+        const error = yield* Effect.flip(audit.inspectThread(auditor, "thread-co", options));
+        expect(error.code).toBe("validation");
+      }
       expect((yield* Effect.flip(audit.inspectThread(auditor, "thread-"))).code).toBe("validation");
       expect((yield* Effect.flip(audit.inspectThread(auditor, "nope"))).code).toBe("not_found");
 
@@ -377,6 +405,14 @@ describe("SimAuditService", () => {
       const next = yield* audit.audit(auditor, { includeClaudeLogs: false });
       expect(next.window.source).toBe(`watermark (${done.lastAuditAt})`);
       expect(SimStore.isTestSimDir(sb.paths)).toBe(true);
+
+      // A write that cannot be moved into place leaves no temp file behind.
+      NodeFS.rmSync(done.statePath);
+      NodeFS.mkdirSync(done.statePath);
+      expect((yield* Effect.flip(audit.markAuditDone(auditor))).code).toBe("io");
+      expect(NodeFS.readdirSync(NodePath.dirname(done.statePath))).toEqual([
+        NodePath.basename(done.statePath),
+      ]);
     }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
   });
 
@@ -450,6 +486,177 @@ describe("SimAuditService", () => {
       }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
     },
   );
+
+  it.effect("checks the record file by file and ignores commands that only read", () => {
+    const sb = sandbox();
+    return Effect.gen(function* () {
+      yield* seedWorld(sb.harnessDir);
+      yield* seedItem(
+        "thread-recorded",
+        "command_execution",
+        { input: "cd ~/.claude/notes && echo more >> other-notes.md" },
+        12,
+      );
+      yield* seedThread(
+        {
+          id: "thread-reader",
+          title: "Read the rules",
+          provider: "codex",
+          runs: [{ model: "gpt-5", user: "Show me the rules" }],
+        },
+        12,
+      );
+      const rules = NodePath.join(sb.harnessDir, "AGENTS.md");
+      yield* seedItem(
+        "thread-reader",
+        "command_execution",
+        {
+          input: `grep -c Rules ${rules} > /dev/null; cp ${rules} ${rules}.bak; cp ${rules} /work/repo/copy.txt; node sim.mjs show --file ${rules} 2>&1`,
+        },
+        12,
+      );
+      // The observer reports what was unrecorded at run end; the scan already lists these files.
+      const sim = yield* SimService;
+      yield* sim.recordTelemetry({
+        ts: at(13),
+        kind: "unrecorded_harness_edit",
+        threadId: "thread-recorded",
+        files: ["~/.claude/notes/build-notes.md", "~/.claude/notes/other-notes.md"],
+      });
+
+      const audit = yield* SimAuditService;
+      const report = yield* audit.audit(auditor, {
+        since: "2026-11-01",
+        includeClaudeLogs: false,
+      });
+      const edits = report.text
+        .split("\n")
+        .filter((line) => line.includes("thread-recorded [") || line.includes("thread-reader"));
+      expect(edits).toEqual([
+        "  2026-11-12 t3 thread-recorded [claudeAgent/claude-opus-5-5] UNRECORDED?: ~/.claude/notes/other-notes.md",
+        "  2026-11-12 t3 thread-recorded [claudeAgent/claude-opus-5-5] recorded: ~/.claude/notes/build-notes.md",
+      ]);
+    }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
+  });
+
+  it.effect("skips agent prompts, the caller's own threads, and non-code reviews", () => {
+    const sb = sandbox();
+    return Effect.gen(function* () {
+      yield* seedWorld(sb.harnessDir);
+      const friction = "schon wieder kaputt";
+      for (const thread of [
+        { id: "thread:delegated-task:research", title: "Review the clinical evidence" },
+        { id: "thread:subagent:abc", title: "Worker" },
+        { id: "thread-child", title: "Worker", parent: "thread-codex" },
+        {
+          id: "thread-side-chat",
+          title: "Review the diff",
+          parent: "thread-codex",
+          sideChat: true,
+        },
+        {
+          id: "thread:delegated-task:own-child",
+          title: "Review the harness diff",
+          parent: "auditor",
+        },
+      ]) {
+        yield* seedThread(
+          { ...thread, provider: "codex", runs: [{ model: "gpt-5", user: friction }] },
+          12,
+        );
+      }
+      yield* seedItem(
+        "thread:delegated-task:own-child",
+        "file_change",
+        { fileName: NodePath.join(sb.harnessDir, "AGENTS.md") },
+        12,
+      );
+      const sim = yield* SimService;
+      yield* sim.recordTelemetry({
+        ts: at(13),
+        kind: "checkpoint_rollback",
+        threadId: "thread:delegated-task:own-child",
+        checkpointId: "own-checkpoint",
+      });
+
+      const audit = yield* SimAuditService;
+      const report = yield* audit.audit(auditor, {
+        since: "2026-11-01",
+        includeClaudeLogs: false,
+      });
+      const flagged = [...report.text.matchAll(/^ {2}\S+ t3 (\S+) \[.*user turns\]/gm)].map(
+        (match) => match[1],
+      );
+      // Only people's threads count: the side chat is one, the spawned threads are not.
+      expect(flagged.sort()).toEqual(["thread-claude", "thread-codex", "thread-side-chat"]);
+      expect(report.signals.delegatedReviews).toBe(1);
+      // Caller's own child skips friction/reviews/rollbacks, but still reports unrecorded harness edits.
+      expect(report.text).not.toContain("own-checkpoint");
+      expect(report.text).toMatch(
+        /t3 thread:delegated-task:own-child .* UNRECORDED\?: ~\/\.claude\/AGENTS\.md/,
+      );
+    }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
+  });
+
+  it.effect("flags later-day unrecorded edits even when an earlier day was recorded", () => {
+    const sb = sandbox();
+    return Effect.gen(function* () {
+      const sim = yield* SimService;
+      const writer = {
+        sessionId: "t3:thread-long",
+        threadId: ThreadId.make("thread-long"),
+        model: "claude-opus-5-5",
+        driver: "claudeAgent",
+        workspaceRoot: "/work/repo",
+      };
+      // The session records its AGENTS.md change on 2026-11-10, then edits the file again on 11-12.
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 10, 10, 12) })),
+        () =>
+          Effect.gen(function* () {
+            yield* sim.read(writer, { action: "index" });
+            yield* sim.applyHarnessChange(writer, {
+              file: "~/.claude/AGENTS.md",
+              oldText: `- ${RULE}\n`,
+              newText: `- ${RULE}\n- Run the build before you commit.\n`,
+              attempt: {
+                new: "Agents skip build checks",
+                action: "add",
+                what: "Build rule",
+                why: "Broken builds landed",
+                anchor: "Run the build before you commit",
+                depends_on: ["model"],
+                predicted: ["skipped-build-checks"],
+                expect: "Builds run before commits",
+                files: ["~/.claude/AGENTS.md"],
+              },
+            });
+          }),
+        () => Effect.sync(() => vi.useRealTimers()),
+      );
+      yield* seedThread(
+        {
+          id: "thread-long",
+          title: "Long-lived session",
+          provider: "claudeAgent",
+          runs: [{ model: "claude-opus-5-5", user: "Update rules" }],
+        },
+        12,
+      );
+      yield* seedItem(
+        "thread-long",
+        "file_change",
+        { fileName: NodePath.join(sb.harnessDir, "AGENTS.md") },
+        12,
+      );
+      const audit = yield* SimAuditService;
+      const report = yield* audit.audit(auditor, {
+        since: "2026-11-01",
+        includeClaudeLogs: false,
+      });
+      expect(report.text).toMatch(/t3 thread-long .* UNRECORDED\?: ~\/\.claude\/AGENTS\.md/);
+    }).pipe(Effect.provide(sb.layer), Effect.ensuring(Effect.sync(() => sb[Symbol.dispose]())));
+  });
 
   it.effect("refuses audit, inspectThread, and markAuditDone while sim.enabled is off", () => {
     const sb = sandbox();

@@ -399,9 +399,17 @@ export const layer = McpToolAccess.toLayer(
             }
             const audit = yield* SimAuditService;
             const inspection = yield* audit
-              .inspectThread(context, params.threadId.trim())
+              .inspectThread(context, params.threadId.trim(), {
+                from: params.from,
+                limit: params.limit,
+              })
               .pipe(Effect.mapError(simFailure));
-            return { action: params.action, text: inspection.text };
+            return {
+              action: params.action,
+              text: inspection.text,
+              totalLines: inspection.totalLines,
+              nextFrom: inspection.nextFrom,
+            };
           }
           const sim = yield* SimService;
           const result = yield* sim
@@ -414,6 +422,7 @@ export const layer = McpToolAccess.toLayer(
               policy: params.policy,
               harness: params.harness,
               page: params.page,
+              staleDays: params.staleDays,
             })
             .pipe(Effect.mapError(simFailure));
           return definedOnly({

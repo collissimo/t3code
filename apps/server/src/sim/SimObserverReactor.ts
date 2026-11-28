@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { splitTaskPrompt } from "../mcp/delegatedTaskModes.ts";
 import { USER_STOP_REASON } from "../orchestration-v2/RunExecutionService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -30,6 +31,7 @@ import {
   classifyHarnessPath,
   expandHarnessFile,
   expandHomeString,
+  localIsoDay,
   resolveSimPaths,
 } from "./SimContracts.ts";
 import * as SimStore from "./SimStore.ts";
@@ -46,7 +48,20 @@ export class SimObserverReactor extends Context.Service<
 const MEMORY_CAP = 512;
 const EXCERPT_LIMIT = 300;
 const TERMINAL_RUN_STATUSES = new Set(["completed", "interrupted", "failed", "cancelled"]);
-const REVIEW_PATTERN = /\b(review|audit|findings|verdict|critic|grade|grader)\b/i;
+const REVIEW_TERM =
+  /(?<![\p{L}\p{N}_])(?:review\p{L}*|re-?check\p{L}*|audit\p{L}*|verif\p{L}*|grad(?:e|ed|es|er|ers|ing)|critics?|critiques?|kritik\p{L}*|fact-?check\p{L}*|(?:über|gegen|nach)?(?:prüf|pruef)\p{L}*)(?![\p{L}\p{N}_])/iu;
+const CODE_CUE =
+  /(?<![\p{L}\p{N}_])(?:code(?:base)?|diffs?|PRs?|pull requests?|branch(?:es)?|commits?|patch(?:es)?|repo(?:s|sitory|sitories)?|zweig(?:e|en)?|harness|SIM|adversarial)(?![\p{L}\p{N}_])/iu;
+// Any research prompt asks for "findings" or a "verdict", so these only count in a title.
+const VERDICT_CUE = /\b(?:findings|verdict)\b/i;
+const REVIEW_ROLE =
+  /\b(?:independent grader|round[- ]?\d+ (?:re-?)?review|check(?:ing)? (?:[\w-]+ ){0,3}(?:diffs?|patch(?:es)?|pull request|PR))\b/i;
+// A title or task that opens by asking to build, change or explore something is not a review.
+const IMPLEMENTATION_LEAD =
+  /^\s*(?:please\s+)?(?:implement|build|add|create|fix|refactor|write|update|migrate|remove|delete|rename|port|wire|explore|investigate|debug|configure|set ?up|document)(?![\w-])/i;
+const REVIEW_LEAD =
+  /^\s*(?:please\s+)?(?:review|audit|verify|grade|re-?check|critique|fact-?check|(?:über|gegen|nach)?prüfe|kontrolliere)(?![\p{L}\p{N}_-])/iu;
+const REVIEW_PROMPT_OPENING = 600;
 const CLAUDE_DRIVER = "claudeAgent";
 
 /** Insertion-ordered map that drops its oldest entry past the cap, so a long-lived server never grows it. */
@@ -62,9 +77,25 @@ function firstSighting(seen: Map<string, true>, key: string): boolean {
   return true;
 }
 
-/** Calendar day in the server's zone, matching how standalone sim.mjs stamps `day` and `round`. */
-const localDay = (at: DateTime.DateTime) =>
-  DateTime.formatIsoDate(DateTime.setZone(at, DateTime.zoneMakeLocal()));
+/** Whether a delegated task asks for a review of code or the harness, by its role, title and opening. */
+export function isCodeReviewTask(title: string, prompt = ""): boolean {
+  const { role, task } = splitTaskPrompt(prompt);
+  if (role === "review") return true;
+  if (role === "implementation" || role === "test") return false;
+  const opening = task.slice(0, REVIEW_PROMPT_OPENING);
+  const sentences = opening.split(/(?<=[.!?])\s+|\n+/);
+  if (IMPLEMENTATION_LEAD.test(title) || IMPLEMENTATION_LEAD.test(sentences[0] ?? "")) return false;
+  const text = `${title}\n${opening}`;
+  if (REVIEW_ROLE.test(text)) return true;
+  if (REVIEW_TERM.test(title)) return CODE_CUE.test(text) || VERDICT_CUE.test(title);
+  // Prompts are full of "verify with the tests" and "Prüfpunkte" boilerplate, so in the prompt a
+  // review term counts in the first sentence, or as the verb a later sentence opens with.
+  return (
+    CODE_CUE.test(text) &&
+    (REVIEW_TERM.test(sentences[0] ?? "") ||
+      sentences.some((sentence) => REVIEW_LEAD.test(sentence)))
+  );
+}
 
 interface ShellWord {
   readonly kind: "word";
@@ -84,7 +115,7 @@ const stripHeredocBodies = (command: string) =>
   );
 
 function tokenizeShell(raw: string): Array<ShellToken> {
-  const source = stripHeredocBodies(raw);
+  const source = stripHeredocBodies(raw).replace(/\\\r?\n/g, "");
   const tokens: Array<ShellToken> = [];
   let index = 0;
   while (index < source.length) {
@@ -147,24 +178,118 @@ function tokenizeShell(raw: string): Array<ShellToken> {
   return tokens;
 }
 
-const COMMAND_WRAPPERS = new Set(["sudo", "env", "command", "builtin", "nohup", "time", "exec"]);
+/** Programs and shell keywords that come before the command that does the work. */
+const COMMAND_WRAPPERS = new Set(
+  "sudo env command builtin nohup time exec if then elif else while until do { !".split(" "),
+);
+// `node sim.mjs` needs no exemption: a JS runner writes no operand, while `cp x sim.mjs` must count.
 const ALL_ARG_WRITERS = new Set(["rm", "unlink", "truncate", "touch", "shred", "tee", "mv"]);
 const LAST_ARG_WRITERS = new Set(["cp", "install", "ln", "rsync"]);
-const SIM_TOOL_SCRIPT = /(?:^|\/)sim(?:-audit)?\.mjs$/;
+const SUFFIX_OR_TARGET_OPTION = /^(?:-[a-zA-Z]*[St]|--(?:suffix|target-directory))$/;
+/** Per command, the options whose following word is their argument rather than a file it writes. */
+const VALUE_OPTIONS = new Map([
+  ["touch", /^(?:-[acfhm]*[drt]|--date|--reference)$/],
+  ["truncate", /^(?:-[a-zA-Z]*[rs]|--(?:reference|size))$/],
+  ["cp", SUFFIX_OR_TARGET_OPTION],
+  ["mv", SUFFIX_OR_TARGET_OPTION],
+  ["ln", SUFFIX_OR_TARGET_OPTION],
+  ["install", /^(?:-[a-zA-Z]*[gmoSt]|--(?:group|mode|owner|suffix|target-directory))$/],
+  ["rsync", /^(?:-[a-zA-Z]*[ef]|--(?:rsh|filter|exclude|include|exclude-from|include-from))$/],
+]);
+const WRAPPER_VALUE_OPTIONS = new Map([
+  [
+    "sudo",
+    /^(?:-(?:(?![CDghpRrtUu])[a-zA-Z])*[CDghpRrtUu]|--(?:chdir|chroot|close-from|group|host|prompt|role|type|other-user|user))$/,
+  ],
+  ["env", /^(?:-(?:(?![CSu])[a-zA-Z])*[CSu]|--(?:chdir|split-string|unset))$/],
+  ["exec", /^-a$/],
+]);
+const TARGET_DIR_OPTION = /^(?:--target-directory(?:=|$)|-(?:(?![gmoSt])[a-zA-Z])*t)(.*)$/;
+const DEVICE_TARGET = /^\/dev\/(?:null|stderr|stdout|tty|fd\/\d+)$/;
+const BACKUP_TARGET = /(?:^|\/)backups\/|\.bak(?:-|$)/;
+const HOME_PREFIX = /^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/;
+
+/** `words` from the command name on, past assignments, `sudo` (and its flags), and the like. */
+function commandWords(words: ReadonlyArray<ShellWord>): ReadonlyArray<ShellWord> {
+  let i = 0;
+  while (i < words.length) {
+    const value = words[i]!.value;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(value)) {
+      i += 1;
+      continue;
+    }
+    const base = NodePath.basename(value);
+    if (!COMMAND_WRAPPERS.has(base)) break;
+    i += 1;
+    const valueOption = WRAPPER_VALUE_OPTIONS.get(base);
+    while (i < words.length && words[i]!.value.startsWith("-")) {
+      const opt = words[i]!.value;
+      i += 1;
+      if (opt === "--") break;
+      if (valueOption?.test(opt) && i < words.length) i += 1;
+    }
+  }
+  return words.slice(i);
+}
+
+/** The DIR of `-t DIR` or `--target-directory=DIR`, which takes the last operand's place. */
+function targetDirectory(args: ReadonlyArray<ShellWord>): ShellWord | undefined {
+  for (const [index, word] of args.entries()) {
+    const match = TARGET_DIR_OPTION.exec(word.value);
+    if (match) return match[1] ? { ...word, value: match[1] } : args[index + 1];
+  }
+  return undefined;
+}
+
+/** Combine a directory destination with each source operand's basename so file classifiers see the written file. */
+function joinTargetDirectory(
+  name: string,
+  directory: ShellWord,
+  sources: ReadonlyArray<ShellWord>,
+): Array<ShellWord> {
+  const joined: Array<ShellWord> = [];
+  for (const source of sources) {
+    // A glob, or rsync's `dir/` (which copies the contents), names no single file to join.
+    if (source.dynamic || /[*?[]/.test(source.value)) continue;
+    if (name === "rsync" && source.value.endsWith("/")) continue;
+    const base = NodePath.posix.basename(source.value.replace(/\/+$/, ""));
+    if (!base || base === "." || base === "..") continue;
+    joined.push({
+      kind: "word",
+      value: NodePath.posix.join(directory.value, base),
+      dynamic: directory.dynamic,
+    });
+  }
+  return joined.length > 0 ? joined : [directory];
+}
 
 function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> {
-  let start = 0;
-  while (
-    start < words.length &&
-    (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[start]!.value) ||
-      COMMAND_WRAPPERS.has(NodePath.basename(words[start]!.value)))
-  ) {
-    start += 1;
+  const [command, ...args] = commandWords(words);
+  const name = NodePath.basename(command?.value ?? "");
+  const valueOption = VALUE_OPTIONS.get(name);
+  const operands = args.filter(
+    (word, index) =>
+      !word.value.startsWith("-") && !valueOption?.test(args[index - 1]?.value ?? ""),
+  );
+  // rsync's `-t` preserves times; for the others it names the destination.
+  const directory =
+    name !== "rsync" && (LAST_ARG_WRITERS.has(name) || name === "mv")
+      ? targetDirectory(args)
+      : undefined;
+  if (directory) {
+    const written = joinTargetDirectory(name, directory, operands);
+    return name === "mv" ? [...operands, ...written] : written;
   }
-  const name = NodePath.basename(words[start]?.value ?? "");
-  const args = words.slice(start + 1);
-  if (args.some((word) => SIM_TOOL_SCRIPT.test(word.value))) return [];
-  const operands = args.filter((word) => !word.value.startsWith("-"));
+  // With two or more sources, or a trailing slash, the last operand is a directory.
+  if (
+    operands.length >= 2 &&
+    (LAST_ARG_WRITERS.has(name) || name === "mv") &&
+    (operands.length >= 3 || operands[operands.length - 1]!.value.endsWith("/"))
+  ) {
+    const sources = operands.slice(0, -1);
+    const written = joinTargetDirectory(name, operands[operands.length - 1]!, sources);
+    return name === "mv" ? [...sources, ...written] : written;
+  }
   if (ALL_ARG_WRITERS.has(name)) return operands;
   if (LAST_ARG_WRITERS.has(name)) return operands.slice(-1);
   if (name === "sed" || name === "perl") {
@@ -189,31 +314,162 @@ function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> 
   return [];
 }
 
-/** Conservative list of paths a Bash command writes, removes, or renames. Unresolvable expansions are skipped. */
-export function detectShellWriteTargets(command: string): Array<string> {
-  const targets: Array<ShellWord> = [];
+/** Normalize `.` / `..` segments while keeping `~` / `$HOME` prefixes intact; null if `..` escapes `$HOME`. */
+function normalizeShellPath(path: string): string | null {
+  const home = HOME_PREFIX.exec(path);
+  if (!home) return NodePath.posix.normalize(path);
+  const prefix = home[0];
+  const rest = path.slice(prefix.length);
+  if (!rest) return prefix;
+  const normalized = NodePath.posix.normalize(rest.slice(1));
+  if (normalized === ".." || normalized.startsWith("../")) return null;
+  return normalized === "." ? prefix : `${prefix}/${normalized}`;
+}
+
+/**
+ * `path` as seen from the shell directory `cwd`, or null when that cannot be known. An empty `cwd`
+ * leaves a relative path for the caller to resolve.
+ */
+function resolveShellPath(cwd: string | null, path: string): string | null {
+  if (NodePath.isAbsolute(path) || HOME_PREFIX.test(path)) return normalizeShellPath(path);
+  if (cwd === null || path.startsWith("~")) return null;
+  if (!cwd) return normalizeShellPath(path);
+  if (!HOME_PREFIX.test(cwd)) return normalizeShellPath(NodePath.join(cwd, path));
+  return normalizeShellPath(`${cwd.replace(/\/+$/, "")}/${path}`);
+}
+
+const STACK_INDEX = /^[+-]\d+$/;
+
+/** The shell directory after one command: moved by `cd`/`pushd`/`popd`, null when unresolvable. */
+function directoryAfter(
+  cwd: string | null,
+  dirStack: Array<string | null>,
+  words: ReadonlyArray<ShellWord>,
+): string | null {
+  const [command, ...args] = commandWords(words);
+  const name = command?.value;
+  if (name === "cd") {
+    const directory = args.find((word) => word.value === "-" || !word.value.startsWith("-"));
+    if (!directory) return "~";
+    if (directory.dynamic || directory.value === "-" || /[*?[]/.test(directory.value)) return null;
+    return resolveShellPath(cwd, directory.value);
+  }
+  if (name === "pushd") {
+    const directory = args.find(
+      (word) => STACK_INDEX.test(word.value) || !word.value.startsWith("-"),
+    );
+    if (!directory) {
+      if (dirStack.length === 0) return cwd;
+      const top = dirStack.pop()!;
+      dirStack.push(cwd);
+      return top;
+    }
+    if (directory.dynamic || STACK_INDEX.test(directory.value) || /[*?[]/.test(directory.value)) {
+      dirStack.push(cwd);
+      return null;
+    }
+    dirStack.push(cwd);
+    return resolveShellPath(cwd, directory.value);
+  }
+  if (name === "popd") {
+    if (args.some((word) => STACK_INDEX.test(word.value))) return null;
+    return dirStack.length > 0 ? dirStack.pop()! : cwd;
+  }
+  return cwd;
+}
+
+/**
+ * Conservative list of paths a Bash command writes, removes, or renames. Relative paths resolve
+ * against `initialCwd` and each `cd`/`pushd`/`popd` since; unresolvable ones, devices, and backups are skipped.
+ */
+export function detectShellWriteTargets(command: string, initialCwd = ""): Array<string> {
+  const targets = new Set<string>();
+  const subshells: Array<{
+    cwd: string | null;
+    deferredCwd: string | null | undefined;
+    dirStack: Array<string | null>;
+  }> = [];
+  let cwd: string | null = initialCwd;
+  let deferredCwd: string | null | undefined;
+  let deferredDepth = 0;
+  let braceDepth = 0;
+  let dirStack: Array<string | null> = [];
   let words: Array<ShellWord> = [];
-  const flush = () => {
-    targets.push(...commandWriteTargets(words));
+  let redirected: Array<ShellWord> = [];
+  let previousOp = ";";
+  const flush = (nextOp: string) => {
+    const lead = words.find((word) => word.value !== "!")?.value;
+    if (lead === "{") braceDepth += 1;
+    else if (lead === "}") braceDepth = Math.max(0, braceDepth - 1);
+    for (const word of [...redirected, ...commandWriteTargets(words)]) {
+      const path = word.dynamic ? null : resolveShellPath(cwd, word.value);
+      if (path !== null && !DEVICE_TARGET.test(path) && !BACKUP_TARGET.test(path))
+        targets.add(path);
+    }
+    // A `cd` in a pipeline, a background job, or an `||` fallback does not move what follows.
+    // A `cd` guarded by `||` moves `cwd` only after the fallback list ends, never inside the fallback.
+    if (previousOp !== "|" && previousOp !== "||" && nextOp !== "|" && nextOp !== "&") {
+      const nextCwd = directoryAfter(cwd, dirStack, words);
+      if (nextOp === "||") {
+        if (nextCwd !== cwd) {
+          deferredCwd = nextCwd;
+          deferredDepth = braceDepth;
+        }
+      } else {
+        cwd = nextCwd;
+      }
+    }
+    // The fallback runs to the end of its pipeline or `{ … }` group.
+    if (
+      deferredCwd !== undefined &&
+      nextOp !== "||" &&
+      nextOp !== "|" &&
+      nextOp !== "(" &&
+      braceDepth <= deferredDepth &&
+      !(nextOp === "\n" && words.length === 0)
+    ) {
+      cwd = deferredCwd;
+      deferredCwd = undefined;
+    }
+    // A newline right after `|` or `||` continues that command line.
+    if (nextOp !== "\n" || words.length > 0) previousOp = nextOp;
     words = [];
+    redirected = [];
   };
   const tokens = tokenizeShell(command);
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i]!;
     if (token.kind === "op") {
-      flush();
+      flush(token.value);
+      if (token.value === "(") {
+        subshells.push({ cwd, deferredCwd, dirStack: [...dirStack] });
+        deferredCwd = undefined;
+      } else if (token.value === ")") {
+        const outer = subshells.pop();
+        if (outer !== undefined) {
+          cwd = outer.cwd;
+          deferredCwd = outer.deferredCwd;
+          dirStack = outer.dirStack;
+        }
+      }
     } else if (token.kind === "redir") {
       const target = tokens[i + 1];
       if (target?.kind !== "word") continue;
       i += 1;
-      const writes = token.value.includes(">") && !token.value.endsWith("&");
-      if (writes && target.value !== "/dev/null") targets.push(target);
+      if (token.value.includes(">") && !token.value.endsWith("&")) redirected.push(target);
     } else {
       words.push(token);
     }
   }
-  flush();
-  return [...new Set(targets.filter((word) => !word.dynamic).map((word) => word.value))];
+  flush(";");
+  return [...targets];
+}
+
+/** `~/.claude/` names the configured harness dir, as in the record; other `~/` paths the home dir. */
+export function expandWriteTarget(raw: string, paths: SimResolvedPaths): string {
+  return raw.trim().startsWith("~/.claude/")
+    ? expandHarnessFile(raw, paths)
+    : expandHomeString(raw, paths.homeDir);
 }
 
 interface Selection {
@@ -289,9 +545,7 @@ const make = Effect.gen(function* () {
     const records: Array<string> = [];
     const harness: Array<string> = [];
     for (const raw of unique) {
-      const expanded = raw.trim().startsWith("~/.claude/")
-        ? expandHarnessFile(raw, paths)
-        : expandHomeString(raw, paths.homeDir);
+      const expanded = expandWriteTarget(raw, paths);
       const kind = classifyHarnessPath(expanded, paths, cwd, { allowTmp });
       if (kind === null) continue;
       const absolute = NodePath.resolve(cwd ?? paths.homeDir, expanded);
@@ -331,12 +585,13 @@ const make = Effect.gen(function* () {
     const authors = new Set([`t3:${event.threadId}`]);
     const native = claudeSession.get(event.threadId);
     if (native) authors.add(`cc:${native}`);
-    const days = new Set([localDay(run.requestedAt), localDay(event.occurredAt)]);
+    const days = new Set([localIsoDay(run.requestedAt), localIsoDay(event.occurredAt)]);
     const recordedToday = new Set<string>();
     for (const problem of snapshot?.state.problems ?? []) {
       for (const attempt of problem.attempts) {
         const byCaller =
-          authors.has(attempt.by) || (attempt.also !== undefined && authors.has(attempt.also));
+          !attempt.retracted &&
+          (authors.has(attempt.by) || (attempt.also !== undefined && authors.has(attempt.also)));
         if (byCaller && days.has(attempt.recorded?.day ?? attempt.round)) {
           for (const file of attempt.files) recordedToday.add(file);
         }
@@ -405,7 +660,8 @@ const make = Effect.gen(function* () {
       yield* classifyFiles(event, item, files, paths);
     } else if (item.type === "command_execution") {
       if (!firstSighting(handledItems, `command:${item.id}`)) return;
-      yield* classifyFiles(event, item, detectShellWriteTargets(item.input), paths);
+      const cwd = yield* cwdFor(event.threadId);
+      yield* classifyFiles(event, item, detectShellWriteTargets(item.input, cwd), paths);
     }
   });
 
@@ -561,8 +817,10 @@ const make = Effect.gen(function* () {
       case "subagent.updated": {
         const subagent = event.payload;
         if (subagent.status !== "completed") return;
-        const text = [subagent.title, subagent.prompt, subagent.result].filter(Boolean).join("\n");
-        if (!REVIEW_PATTERN.test(text) || !firstSighting(handledItems, `subagent:${subagent.id}`))
+        if (
+          !isCodeReviewTask(subagent.title ?? "", subagent.prompt) ||
+          !firstSighting(handledItems, `subagent:${subagent.id}`)
+        )
           return;
         const excerpt = (subagent.result || subagent.prompt || subagent.title || "").trim();
         return yield* sim.recordTelemetry({

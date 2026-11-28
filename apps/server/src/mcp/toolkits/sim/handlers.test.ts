@@ -51,7 +51,15 @@ interface Setup {
 }
 
 const setup = (options: Setup = {}) => {
-  const reads: Array<{ caller: SimCallerContext; action: string }> = [];
+  const reads: Array<{
+    caller: SimCallerContext;
+    action: string;
+    staleDays?: number | undefined;
+  }> = [];
+  const inspected: Array<{
+    prefix: string;
+    options?: { from?: number | undefined; limit?: number | undefined } | undefined;
+  }> = [];
   const writes: Array<{ caller: SimCallerContext; request: SimWriteRequest }> = [];
   const applies: Array<{ caller: SimCallerContext; dryRun: boolean }> = [];
   const recent: Array<{
@@ -127,7 +135,11 @@ const setup = (options: Setup = {}) => {
         }),
         Layer.mock(SimService)({
           read: (caller, request) => {
-            reads.push({ caller, action: request.action });
+            reads.push({
+              caller,
+              action: request.action,
+              ...(request.staleDays !== undefined ? { staleDays: request.staleDays } : {}),
+            });
             return fail ?? Effect.succeed({ text: `read ${request.action}` });
           },
           write: (caller, request) => {
@@ -185,7 +197,15 @@ const setup = (options: Setup = {}) => {
                 newlyObservedModels: [],
               },
             }),
-          inspectThread: (_caller, prefix) => Effect.succeed({ threadId: prefix, text: "thread" }),
+          inspectThread: (_caller, prefix, inspectionOptions) => {
+            inspected.push({ prefix, options: inspectionOptions });
+            return Effect.succeed({
+              threadId: prefix,
+              text: "thread",
+              totalLines: 1,
+              nextFrom: null,
+            });
+          },
           markAuditDone: () =>
             Effect.succeed({ lastAuditAt: "2026-11-19", statePath: "/state", text: "audit done" }),
         }),
@@ -203,7 +223,7 @@ const setup = (options: Setup = {}) => {
       );
     }).pipe(Effect.provide(layer));
 
-  return { call, reads, writes, applies, recent };
+  return { call, reads, writes, applies, recent, inspected };
 };
 
 it.effect("derives caller identity from server state, never from the provider session id", () =>
@@ -245,22 +265,38 @@ it.effect("derives caller identity from server state, never from the provider se
   }),
 );
 
-it.effect("routes audit and inspect_thread to the audit service", () =>
+it.effect("routes audit, inspect_thread pagination, and stats through sim_read", () =>
   Effect.gen(function* () {
-    const { call, reads } = setup();
+    const { call, reads, inspected } = setup();
     expect(yield* call("sim_read", { action: "audit", days: 7 })).toMatchObject({
       action: "audit",
       text: "audit report",
       summary: { threadsScanned: 4, sim: { openPredictions: 2 } },
     });
-    expect(yield* call("sim_read", { action: "inspect_thread", threadId: " thread:x " })).toEqual({
+    expect(
+      yield* call("sim_read", {
+        action: "inspect_thread",
+        threadId: " thread:x ",
+        from: 5,
+        limit: 20,
+      }),
+    ).toEqual({
       action: "inspect_thread",
       text: "thread",
+      totalLines: 1,
+      nextFrom: null,
     });
+    expect(inspected).toEqual([{ prefix: "thread:x", options: { from: 5, limit: 20 } }]);
     expect(yield* call("sim_read", { action: "inspect_thread" })).toMatchObject({
       code: "invalid_request",
     });
     expect(reads).toEqual([]);
+
+    expect(yield* call("sim_read", { action: "stats", staleDays: 21 })).toEqual({
+      action: "stats",
+      text: "read stats",
+    });
+    expect(reads[0]?.staleDays).toBe(21);
   }),
 );
 
@@ -513,4 +549,12 @@ it("advertises compact flat schemas without any caller identity field", () => {
     (advertisedJsonSchema(SimToolkit.tools.sim_apply_harness_change) as { required: unknown })
       .required,
   ).toEqual(["file", "attempt"]);
+  const simReadProps = (
+    advertisedJsonSchema(SimToolkit.tools.sim_read) as { properties: Record<string, unknown> }
+  ).properties;
+  expect(simReadProps.days).toMatchObject({ type: "number", exclusiveMinimum: 0 });
+  expect(simReadProps.staleDays).toMatchObject({ type: "integer", minimum: 1, maximum: 3650 });
+  expect(simReadProps.limit).toMatchObject({ type: "integer", minimum: 1, maximum: 500 });
+  expect(simReadProps.from).toMatchObject({ type: "integer", minimum: 1 });
+  expect(simReadProps.page).toMatchObject({ type: "integer", minimum: 1 });
 });

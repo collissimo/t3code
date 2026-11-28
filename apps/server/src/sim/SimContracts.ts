@@ -12,6 +12,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -43,6 +44,87 @@ export const SIM_LINK_INVERSE: Readonly<Record<SimLinkKind, SimLinkKind>> = {
   related: "related",
   conflicts: "conflicts",
 };
+
+/** A session id without its `cc:`/`t3:` prefix so both spellings identify the same session. */
+export const bare = (id: string) => String(id).replace(/^(cc|t3):/, "");
+
+/** The harness a record was made under; Claude Code sessions recorded by sim.mjs carry none. */
+export const effectiveHarness = (record: {
+  readonly harness?: string | undefined;
+  readonly by: string;
+}) => record.harness ?? (record.by.startsWith("cc:") ? "claudeAgent" : undefined);
+
+export const SIM_FAILURE_RESULTS: ReadonlySet<SimResult> = new Set([
+  "missed",
+  "regressed",
+  "misfired",
+]);
+
+export const DAY_MS = 86_400_000;
+
+/** Calendar day in the server's zone, as standalone sim.mjs stamps `day` and `round`. */
+export const localIsoDay = (at: DateTime.DateTime | number) =>
+  DateTime.formatIsoDate(DateTime.setZone(DateTime.makeUnsafe(at), DateTime.zoneMakeLocal()));
+
+export const SIM_MAX_INSPECT_LINES = 500;
+
+export const pluralize = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+export const clipText = (text: string, max: number) =>
+  text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+
+export const standing = (attempt: SimAttempt) =>
+  attempt.observations.filter((obs) => !obs.retracted);
+
+export const FORK_FAMILY_REASON =
+  "reported from the fork or side-chat family of the session that made the change";
+
+/** True when one of these sessions made or recorded the attempt, compared with and without `cc:`/`t3:`. */
+export function sharesFamily(
+  attempt: Pick<SimAttempt, "by" | "also" | "sample">,
+  sessionIds: ReadonlyArray<string>,
+) {
+  const authors = [attempt.by, attempt.also, attempt.sample].filter(
+    (id): id is string => !!id && id !== SIM_UNKNOWN,
+  );
+  return sessionIds.some((id) =>
+    authors.some((author) => id === author || bare(id) === bare(author)),
+  );
+}
+
+/**
+ * Why a reported fix cannot settle the prediction, or null when it can. Matches sim.mjs for
+ * `by`/`also` (exact) and `sample` (prefix-stripped), plus the caller's fork/side-chat family.
+ */
+export function ownReport(
+  attempt: Pick<SimAttempt, "by" | "also" | "sample" | "backfilled">,
+  obs: Pick<SimObservation, "by" | "also" | "source">,
+  forkFamilySessionIds?: ReadonlyArray<string>,
+): string | null {
+  const names = (record: { readonly by: string; readonly also?: string | undefined }) =>
+    [record.by, record.also].filter((id): id is string => !!id && id !== SIM_UNKNOWN);
+  if (obs.source === "self") return "self-reported";
+  if (obs.by === SIM_UNKNOWN) return "the reporting session is unknown";
+  const reporters = names(obs);
+  const authors = names(attempt);
+  if (reporters.some((id) => authors.includes(id))) {
+    return attempt.backfilled
+      ? "reported by the session that recorded the change"
+      : "same session as the change";
+  }
+  if (attempt.sample !== SIM_UNKNOWN && reporters.some((id) => bare(id) === bare(attempt.sample))) {
+    return "same session as the change";
+  }
+  if (forkFamilySessionIds && sharesFamily(attempt, forkFamilySessionIds)) {
+    return FORK_FAMILY_REASON;
+  }
+  if (attempt.by === SIM_UNKNOWN) return "the session that recorded the change is unknown";
+  return null;
+}
+
+export const settlesFix = (attempt: SimAttempt, obs: SimObservation) =>
+  obs.result === "fixed" && !ownReport(attempt, obs);
 
 /** Journal event format version. Stays 2 for full replay compatibility with standalone sim.mjs. */
 export const SIM_FORMAT = 2;
@@ -521,7 +603,15 @@ export type SimTelemetryEvent =
     };
 
 export interface SimReadRequest {
-  readonly action: "index" | "show" | "brief_all" | "find" | "by_file" | "check" | "review";
+  readonly action:
+    | "index"
+    | "show"
+    | "brief_all"
+    | "find"
+    | "by_file"
+    | "check"
+    | "review"
+    | "stats";
   readonly ids?: ReadonlyArray<string> | undefined;
   readonly brief?: boolean | undefined;
   readonly query?: string | undefined;
@@ -529,6 +619,7 @@ export interface SimReadRequest {
   readonly policy?: string | undefined;
   readonly harness?: string | undefined;
   readonly page?: number | undefined;
+  readonly staleDays?: number | undefined;
 }
 
 export interface SimReadResult {
@@ -669,9 +760,18 @@ export interface SimAuditReport {
   readonly advisorEscalation?: SimAdvisorEscalation | undefined;
 }
 
+/** Which lines of a thread's transcript to return, counted from 1 below the header. */
+export interface SimThreadInspectionOptions {
+  readonly from?: number | undefined;
+  readonly limit?: number | undefined;
+}
+
 export interface SimThreadInspectionResult {
   readonly threadId: string;
   readonly text: string;
+  readonly totalLines: number;
+  /** The `from` that reads on, or null at the end of the transcript. */
+  readonly nextFrom: number | null;
 }
 
 export interface SimStateSnapshot {
@@ -736,6 +836,7 @@ export class SimAuditService extends Context.Service<
     readonly inspectThread: (
       caller: SimCallerContext,
       threadIdPrefix: string,
+      options?: SimThreadInspectionOptions,
     ) => Effect.Effect<SimThreadInspectionResult, SimServiceError>;
     readonly markAuditDone: (
       caller: SimCallerContext,
