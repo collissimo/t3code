@@ -159,6 +159,18 @@ describe("searchProblemsRanked", () => {
     assert.strictEqual(searchProblemsRanked(many, "status:live").length, 25);
   });
 
+  it("finds by status:fixed only settled fixes, and self-grades by status:unconfirmed", () => {
+    const state = simState([
+      problem("S", "Settled", [attempt("A1", { observations: [observation("fixed")] })]),
+      problem("U", "Self-graded", [
+        attempt("A2", { observations: [observation("fixed", { by: "author", source: "self" })] }),
+      ]),
+    ]);
+    const ids = (query: string) => searchProblemsRanked(state, query).map((hit) => hit.problem.id);
+    assert.deepStrictEqual(ids("status:fixed"), ["S"]);
+    assert.deepStrictEqual(ids("status:unconfirmed"), ["U"]);
+  });
+
   it("finds by status:nolive only entries without any live rule", () => {
     const state = simState([
       problem("L", "Partly live", [attempt("A1"), attempt("A2", { live: false })]),

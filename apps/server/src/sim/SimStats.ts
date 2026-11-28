@@ -159,6 +159,8 @@ function filterMatches(filter: SimSearchFilter, pairs: ReadonlyArray<Pair>): boo
             return attempt.accepted && attempt.live && attempt.pending.length > 0;
           case "live":
             return attempt.live;
+          case "fixed":
+            return standing(attempt).some((obs) => settlesFix(attempt, obs));
           case "unconfirmed":
             return standing(attempt).some(
               (obs) => obs.result === "fixed" && !settlesFix(attempt, obs),

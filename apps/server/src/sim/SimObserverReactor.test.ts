@@ -265,6 +265,18 @@ describe("detectShellWriteTargets", () => {
       targets: ["~/.claude/hooks/gate.mjs", "rule.md", "~/.claude/notes/rule.md"],
     },
     {
+      name: "treats the last of three or more operands as a directory",
+      command: "cp a.mjs b.mjs ~/.claude/hooks",
+      targets: ["~/.claude/hooks/a.mjs", "~/.claude/hooks/b.mjs"],
+    },
+    {
+      name: "loses the directory on pushd/popd stack indexes and follows a negated group",
+      command:
+        "pushd -1 && echo x >> AGENTS.md; cd /w; popd -1 && echo y >> CLAUDE.md; cd /w; cd /x || ! { touch a; touch b; }; touch c",
+      cwd: "/w",
+      targets: ["/w/a", "/w/b", "/x/c"],
+    },
+    {
       name: "joins no name for globs or rsync's contents-of-dir source",
       command: "cp hooks/*.mjs ~/.claude/hooks/; rsync -a notes/ ~/.claude/notes/",
       targets: ["~/.claude/hooks/", "~/.claude/notes/"],

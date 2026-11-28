@@ -280,10 +280,11 @@ function commandWriteTargets(words: ReadonlyArray<ShellWord>): Array<ShellWord> 
     const written = joinTargetDirectory(name, directory, operands);
     return name === "mv" ? [...operands, ...written] : written;
   }
+  // With two or more sources, or a trailing slash, the last operand is a directory.
   if (
     operands.length >= 2 &&
     (LAST_ARG_WRITERS.has(name) || name === "mv") &&
-    operands[operands.length - 1]!.value.endsWith("/")
+    (operands.length >= 3 || operands[operands.length - 1]!.value.endsWith("/"))
   ) {
     const sources = operands.slice(0, -1);
     const written = joinTargetDirectory(name, operands[operands.length - 1]!, sources);
@@ -337,6 +338,8 @@ function resolveShellPath(cwd: string | null, path: string): string | null {
   return normalizeShellPath(`${cwd.replace(/\/+$/, "")}/${path}`);
 }
 
+const STACK_INDEX = /^[+-]\d+$/;
+
 /** The shell directory after one command: moved by `cd`/`pushd`/`popd`, null when unresolvable. */
 function directoryAfter(
   cwd: string | null,
@@ -352,14 +355,16 @@ function directoryAfter(
     return resolveShellPath(cwd, directory.value);
   }
   if (name === "pushd") {
-    const directory = args.find((word) => !word.value.startsWith("-"));
+    const directory = args.find(
+      (word) => STACK_INDEX.test(word.value) || !word.value.startsWith("-"),
+    );
     if (!directory) {
       if (dirStack.length === 0) return cwd;
       const top = dirStack.pop()!;
       dirStack.push(cwd);
       return top;
     }
-    if (directory.dynamic || /^[+-]\d+$/.test(directory.value) || /[*?[]/.test(directory.value)) {
+    if (directory.dynamic || STACK_INDEX.test(directory.value) || /[*?[]/.test(directory.value)) {
       dirStack.push(cwd);
       return null;
     }
@@ -367,8 +372,7 @@ function directoryAfter(
     return resolveShellPath(cwd, directory.value);
   }
   if (name === "popd") {
-    const arg = args.find((word) => !word.value.startsWith("-"));
-    if (arg && /^[+-]\d+$/.test(arg.value)) return null;
+    if (args.some((word) => STACK_INDEX.test(word.value))) return null;
     return dirStack.length > 0 ? dirStack.pop()! : cwd;
   }
   return cwd;
@@ -394,8 +398,9 @@ export function detectShellWriteTargets(command: string, initialCwd = ""): Array
   let redirected: Array<ShellWord> = [];
   let previousOp = ";";
   const flush = (nextOp: string) => {
-    if (words[0]?.value === "{") braceDepth += 1;
-    else if (words[0]?.value === "}") braceDepth = Math.max(0, braceDepth - 1);
+    const lead = words.find((word) => word.value !== "!")?.value;
+    if (lead === "{") braceDepth += 1;
+    else if (lead === "}") braceDepth = Math.max(0, braceDepth - 1);
     for (const word of [...redirected, ...commandWriteTargets(words)]) {
       const path = word.dynamic ? null : resolveShellPath(cwd, word.value);
       if (path !== null && !DEVICE_TARGET.test(path) && !BACKUP_TARGET.test(path))

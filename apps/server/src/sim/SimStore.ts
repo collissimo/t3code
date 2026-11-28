@@ -1324,6 +1324,13 @@ function coverageUnits(paths: SimResolvedPaths, read: HarnessReader = harnessRea
   for (const file of ["~/.claude/AGENTS.md", ...noteFiles]) {
     const text = read(file)?.text ?? null;
     if (text === null) continue;
+    if (file.endsWith("/recipes.md")) {
+      // As in sim.mjs: every recipe is a lesson from one incident.
+      for (const section of text.split(/^(?=## )/m).filter((part) => part.startsWith("## "))) {
+        units.push({ file, text: section });
+      }
+      continue;
+    }
     let inLessons = false;
     for (const line of text.split("\n")) {
       if (line.startsWith("## ")) inLessons = /^## (Scars|Wins)\b/.test(line);
@@ -2586,15 +2593,15 @@ export function runRead(context: SimReadContext, request: SimReadRequest): SimRe
         );
       const hits = searchProblemsRanked(state, request.query);
       if (!hits.length) return { text: `no entry contains: ${request.query}` };
-      const listing = paged({
-        command: `SIM find ${request.query}`,
-        page: request.page,
-        units: hits.map((hit) => indexLine(hit.problem)),
-      });
       return {
-        text: hits[0]?.partial
-          ? `No entry contains every word; these match some of them.\n\n${listing}`
-          : listing,
+        text: paged({
+          command: `SIM find ${request.query}`,
+          page: request.page,
+          head: hits[0]?.partial
+            ? ["No entry contains every word; these match some of them.", ""]
+            : [],
+          units: hits.map((hit) => indexLine(hit.problem)),
+        }),
       };
     }
     case "stats": {

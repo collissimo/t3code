@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 
 import {
   classifyHarnessPath,
+  ownReport,
   resolveSimPaths,
   SIM_FORMAT,
   SIM_GENESIS,
@@ -291,6 +292,13 @@ describe("SimStore self-grading", () => {
     );
   });
 
+  it("compares by/also exactly and only sample by bare id, as sim.mjs does", () => {
+    const backfilled = { by: "t3:s", sample: "unknown", backfilled: true };
+    const report = { by: "cc:s", source: "log" } as const;
+    expect(ownReport(backfilled, report)).toBeNull();
+    expect(ownReport({ ...backfilled, sample: "t3:s" }, report)).toBe("same session as the change");
+  });
+
   it("preserves the original source when a fork records a non-fixed observation", () => {
     using sb = sandbox();
     sb.harness("AGENTS.md", `- ${RULE}\n`);
@@ -388,6 +396,37 @@ describe("SimStore harness inspection", () => {
     sb.harness("AGENTS.md", "# Rules\n\n## Scars\n- Scar: build first.\n");
     const after = SimStore.inspectHarness(SimStore.load(sb.paths).state, sb.paths);
     expect(after.drift.map((item) => item.attempt.id)).toEqual(["A1"]);
+  });
+
+  it("counts every recipes.md section as a rule that needs a record, as sim.mjs does", () => {
+    using sb = sandbox();
+    sb.harness("AGENTS.md", `- ${RULE}\n`);
+    sb.harness("notes/recipes.md", "# Recipes\n\n## Flaky test\nFind the cause.\n");
+    recordRule(sb.paths);
+    const { uncovered } = SimStore.inspectHarness(SimStore.load(sb.paths).state, sb.paths);
+    expect(uncovered.map((unit) => unit.file)).toEqual(["~/.claude/notes/recipes.md"]);
+  });
+
+  it("find flags partial matches on the first page only and lists the valid status filters", () => {
+    using sb = sandbox();
+    sb.harness("AGENTS.md", `- ${RULE}\n`);
+    recordRule(sb.paths);
+    const find = (query: string) =>
+      SimStore.runRead(
+        {
+          paths: sb.paths,
+          loaded: SimStore.loadReadOnly(sb.paths),
+          caller: author,
+          settings: { advisorModelSelection: null },
+          telemetry: [],
+        },
+        { action: "find", query },
+      ).text;
+    expect(find("build zebra")).toMatch(/^No entry contains every word/);
+    expect(find("build")).not.toMatch(/No entry contains every word/);
+    expect(failure(() => find("status:opne")).problems.join(" ")).toContain(
+      "use one of: open, live, nolive",
+    );
   });
 });
 
