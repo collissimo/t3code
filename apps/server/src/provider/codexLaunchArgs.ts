@@ -1,4 +1,5 @@
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
+import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 
 const T3CODE_CODEX_LAUNCH_ARGS_ENV = "T3CODE_CODEX_LAUNCH_ARGS";
 
@@ -12,20 +13,44 @@ export const resolveCodexLaunchArgs = (
 
 const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> => tokenizeCliArgs(launchArgs);
 
+export const codexUsesStrictConfig = (launchArgs?: string) =>
+  codexLaunchArgv(launchArgs).includes("--strict-config");
+
+export type CodexAppServerArgsOptions = {
+  readonly strictConfigVersion?: string | null | undefined;
+  readonly codeMode?: boolean | undefined;
+};
+
 // T3 unsubscribes only when it unloads a thread; Codex's own unload delay would stack on that.
 export const codexAppServerArgs = (
   launchArgs?: string,
-  options?: { readonly codeMode?: boolean },
-) => [
-  "app-server",
-  "-c",
-  "thread_unload_delay_secs=0",
-  // Otherwise every thread opens with Codex's warning about unfinished features.
-  ...(options?.codeMode === true
-    ? ["--enable", "code_mode", "-c", "suppress_unstable_features_warning=true"]
-    : []),
-  ...codexLaunchArgv(launchArgs),
-];
+  optionsOrVersion?: string | null | CodexAppServerArgsOptions,
+) => {
+  const strictConfigVersion =
+    typeof optionsOrVersion === "object" && optionsOrVersion !== null
+      ? optionsOrVersion.strictConfigVersion
+      : optionsOrVersion;
+  const codeMode =
+    typeof optionsOrVersion === "object" && optionsOrVersion !== null
+      ? optionsOrVersion.codeMode
+      : undefined;
+  const args = codexLaunchArgv(launchArgs);
+  // Strict config rejects this key before Codex 0.154. Leave unknown versions untouched.
+  const setUnloadDelay =
+    !args.includes("--strict-config") ||
+    (strictConfigVersion != null &&
+      parseSemver(strictConfigVersion) !== null &&
+      compareSemverVersions(strictConfigVersion, "0.154.0") >= 0);
+  return [
+    "app-server",
+    ...(setUnloadDelay ? ["-c", "thread_unload_delay_secs=0"] : []),
+    // Otherwise every thread opens with Codex's warning about unfinished features.
+    ...(codeMode === true
+      ? ["--enable", "code_mode", "-c", "suppress_unstable_features_warning=true"]
+      : []),
+    ...args,
+  ];
+};
 
 interface LaunchArgFilter {
   readonly switches: ReadonlySet<string>;

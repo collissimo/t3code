@@ -58,7 +58,6 @@
         "src/bin.ts!",
         "src/claude-history-worker.ts!",
         "src/script-sandbox-worker.ts!",
-        "src/process-launcher.ts!",
         "scripts/cli.ts",
         "scripts/fetch-expo-schema.ts",
         "scripts/probe-claude-fork-local-rollback-replay.ts",
@@ -108,6 +107,7 @@
       // Worktree setup (scripts/setup-worktree.ts) runs this directly, and evidence
       // fixtures run under node. The dictation worklet loads by URL (audioWorklet.addModule).
       "entry": [
+        "src/epubPreviewMain.tsx!",
         "scripts/warm-dep-cache.ts",
         "test/fixtures/**/*.mjs",
         "public/dictation-capture-worklet.js",
